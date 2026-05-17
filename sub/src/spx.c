@@ -360,29 +360,90 @@ static uint8_t   g_mod_loaded = 0;
  * to set it to match the WIDTH not the height. */
 #define ROT_IMG_VSIZE_CELLS 16   /* 128 / 8 */
 
-/* MC-T4 sub-CPU software render: fill the IMG buffer in Word RAM with a
- * pattern the main CPU then DMAs to VRAM + paints onto plane B. The Mega
- * CD ASIC graphics engine was tried (see commit history) but produces
- * 0xFF cells regardless of stamp data in our Mode 1 cart context — saved
- * for later investigation. This sub-CPU path is reliable and demonstrably
- * works at 60 fps on ares (validated 2026-05-17).
+/* ---- Sub-CPU pixel renderer ---------------------------------------------
  *
- * Input via COMCMD1: byte value to fill IMG buffer with. dst = color N
- * means main passes (N | (N<<4)) — e.g., 0x44 for solid colour-4. */
+ * IMG buffer is 128x128 px = 16x16 cells, laid out in VDP-tile format
+ * (8 rows × 4 bytes per row, 4bpp packed left-to-right within each byte).
+ * Cells are stored row-major matching how main's plane-B paint walks them.
+ *
+ * Pixel (px, py) in IMG buffer →
+ *   cell (cx, cy)         = (px / 8, py / 8)
+ *   cell-local (lx, ly)   = (px & 7, py & 7)
+ *   cell offset           = (cy * 16 + cx) * 32
+ *   byte within cell      = ly * 4 + (lx >> 1)
+ *   nibble                = (lx & 1) ? low : high
+ */
+
+#define IMG_W 128
+#define IMG_H 128
+
+static void img_clear(uint8_t pal_pair)
+{
+  volatile uint16_t * p = (volatile uint16_t *) (WORD_RAM_SUB + ROT_IMG_BUF_OFF);
+  uint16_t w = (uint16_t) ((pal_pair << 8) | pal_pair);
+  for (uint16_t i = 0; i < 4096; ++i) p[i] = w;
+}
+
+static inline void img_setpx(int16_t x, int16_t y, uint8_t pal)
+{
+  if ((uint16_t) x >= IMG_W || (uint16_t) y >= IMG_H) return;
+  uint16_t cell_off = (uint16_t) ((y >> 3) * 16 + (x >> 3)) * 32;
+  uint16_t byte_off = (uint16_t) ((y & 7) * 4 + ((x & 7) >> 1));
+  volatile uint8_t * dst = WORD_RAM_SUB + ROT_IMG_BUF_OFF + cell_off + byte_off;
+  if (x & 1)
+    *dst = (uint8_t) ((*dst & 0xF0) | (pal & 0x0F));
+  else
+    *dst = (uint8_t) ((*dst & 0x0F) | ((pal & 0x0F) << 4));
+}
+
+/* Bresenham line drawn with a full 2x2 brush at each step — at 45° the
+ * 2x2 blocks tile diagonally with no gaps; at axis-aligned slopes the
+ * blocks overlap into a 2-px-thick solid line. */
+static void img_line(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint8_t pal)
+{
+  int16_t dx =  (int16_t) ((x1 > x0) ? (x1 - x0) : (x0 - x1));
+  int16_t dy = -(int16_t) ((y1 > y0) ? (y1 - y0) : (y0 - y1));
+  int16_t sx = (x0 < x1) ? 1 : -1;
+  int16_t sy = (y0 < y1) ? 1 : -1;
+  int16_t err = dx + dy;
+  while (1) {
+    img_setpx(x0,     y0,     pal);
+    img_setpx(x0 + 1, y0,     pal);
+    img_setpx(x0,     y0 + 1, pal);
+    img_setpx(x0 + 1, y0 + 1, pal);
+    if (x0 == x1 && y0 == y1) break;
+    int16_t e2 = (int16_t) (err << 1);
+    if (e2 >= dy) { err += dy; x0 = (int16_t) (x0 + sx); }
+    if (e2 <= dx) { err += dx; y0 = (int16_t) (y0 + sy); }
+  }
+}
+
+/* 16-lane Tempest web rim offsets, radius 60 px so the web fills most
+ * of the 128-px IMG buffer (rim spans (4,4)..(124,124) around the
+ * buffer centre (64, 64)). */
+static const int8_t WEB_RIM[16][2] = {
+  {   0,  60 }, {  23,  55 }, {  42,  42 }, {  55,  23 },
+  {  60,   0 }, {  55, -23 }, {  42, -42 }, {  23, -55 },
+  {   0, -60 }, { -23, -55 }, { -42, -42 }, { -55, -23 },
+  { -60,   0 }, { -55,  23 }, { -42,  42 }, { -23,  55 },
+};
+
+/* MC-T4b: render the 16-lane Tempest web as crisp pixel lines into the
+ * IMG buffer. main passes the line colour as palette-index pair in
+ * COMCMD1's low byte. */
 static void render_rot(void)
 {
   asm volatile("move.w #0x2700, %sr");
   wait_2m_sub();
 
-  /* Byte-pair fill value from main (low byte of comcmd1). */
-  uint16_t fill_byte = *ga_reg_comcmd1 & 0xFF;
-  if (fill_byte == 0) fill_byte = 0x44;        /* default = solid colour 4 */
-  uint16_t fill_word = (uint16_t) ((fill_byte << 8) | fill_byte);
+  uint8_t pal = (uint8_t) (*ga_reg_comcmd1 & 0x0F);
+  if (pal == 0) pal = 4;        /* default colour 4 */
 
-  /* Fill 8 KB (4096 words) of IMG buffer with the colour pair. */
-  {
-    volatile uint16_t * p = (volatile uint16_t *) (WORD_RAM_SUB + ROT_IMG_BUF_OFF);
-    for (uint16_t i = 0; i < 4096; ++i) p[i] = fill_word;
+  img_clear(0x00);              /* black background */
+  for (uint8_t lane = 0; lane < 16; ++lane) {
+    int16_t rim_x = (int16_t) (64 + WEB_RIM[lane][0]);
+    int16_t rim_y = (int16_t) (64 + WEB_RIM[lane][1]);
+    img_line(64, 64, rim_x, rim_y, pal);
   }
 
   grant_2m_sub();

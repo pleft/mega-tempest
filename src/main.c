@@ -751,7 +751,8 @@ static void play_main_thread(void)
     print("B = TITLE",          plane_xy(2, 27));
     print("LANE:",              plane_xy(28, 3));
     print("SCORE:",             plane_xy(28, 27));
-    draw_web_once();
+    /* Web now rendered as crisp pixel lines on plane B by the Sub CPU;
+     * text-dot web on plane A is retired. */
     g_scene_dirty = 0;
   }
 
@@ -765,14 +766,15 @@ static void play_main_thread(void)
   }
 
   // Render every live entity at its (lane, depth_fp) computed pixel pos.
-  // On move, restore a web dot under the old cell so the web stays intact.
+  // On move, clear the previous cell with a space — the web lives on plane
+  // B now, so plane A just needs to be transparent under entities.
   for (Entity * e = g_active_head; e; e = e->next) {
     s16 px = web_pixel_x(e->lane, e->depth_fp);
     s16 py = web_pixel_y(e->lane, e->depth_fp);
     s16 cx = px >> 3;
     s16 cy = py >> 3;
     if (e->prev_cx >= 0 && (e->prev_cx != cx || e->prev_cy != cy))
-      plane_putc((u16) e->prev_cx, (u16) e->prev_cy, '.');
+      plane_putc((u16) e->prev_cx, (u16) e->prev_cy, ' ');
     plane_putc((u16) cx, (u16) cy, (char) e->glyph);
     e->prev_cx = cx;
     e->prev_cy = cy;
