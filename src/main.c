@@ -162,8 +162,9 @@ static inline u8 grant_2m_main_to(u32 t) {
   return 0;
 }
 
-static void mcd_render_rot(void)
+static void mcd_render_rot(u16 dx)
 {
+  *GA_REG_COMCMD1_W = dx;                                 /* animation param */
   grant_2m_main_to(0x80000);                              /* hand WR to sub */
   *GA_REG_COMCMD0_W = CMD_RENDER_ROT;
   while (*GA_REG_COMSTAT0_W != CMD_RENDER_ROT) ;          /* sub processed */
@@ -393,7 +394,9 @@ static void rot_dma_image_to_vram(void)
 
 static void rot_paint_plane_b(void)
 {
-  /* 16x16 block of tile-map entries on plane B, centred-ish at (12, 6). */
+  /* Diagnostic mode: show 16 columns × 16 rows in plane-B order, tile
+   * index = row*16 + col. Whatever shape we see (16x8 / 8x16 / 16x16)
+   * tells us how the engine laid out the buffer. */
   for (u8 row = 0; row < 16; ++row) {
     u16 plane_b_addr = 0x4000 + ((6 + row) * 64 + 12) * 2;
     vdp_ctrl_32 = to_vdp_addr(plane_b_addr) | VRAM_W;
@@ -435,15 +438,25 @@ static void xform_main_thread(void)
   if (g_scene_dirty) {
     clear_play_area();
     print("MC-T3 ASIC TRACER",  plane_xy(11, 3));
+    print("B = TITLE",          plane_xy(2, 27));
+    g_scene_dirty = 0;
     if (!g_mcd_present) {
       print("NO MEGA CD DETECTED — DEMO REQUIRES IT", plane_xy(2, 14));
-    } else {
-      mcd_render_rot();
-      rot_dma_image_to_vram();
-      rot_paint_plane_b();
     }
-    print("B = TITLE",  plane_xy(2, 27));
-    g_scene_dirty = 0;
+  }
+
+  if (g_mcd_present) {
+    /* Animate: dx (5.11) oscillates 1024..3072 over ~2 sec. Triangle
+     * wave via the low 7 bits of the frame counter (0..127), with the
+     * top bit flipping direction. */
+    static u16 anim = 0;
+    anim++;
+    u16 phase = anim & 0xFF;                /* 0..255 over ~4 sec */
+    if (phase > 127) phase = 255 - phase;   /* 0..127 up, then down */
+    u16 dx = 1024 + (phase << 4);           /* 1024..3072 */
+    mcd_render_rot(dx);
+    rot_dma_image_to_vram();
+    rot_paint_plane_b();
   }
 
   if (p1_single & PAD_B) {

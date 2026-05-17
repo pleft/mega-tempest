@@ -354,6 +354,11 @@ static uint8_t   g_mod_loaded = 0;
 #define ROT_IMG_BUF_OFF     0x30000
 #define ROT_IMG_W           128
 #define ROT_IMG_H           128
+/* The IMGBUFVSIZE register sets the cell-stride of the output buffer.
+ * Empirically with VSIZE=(H/8)-1 we get half the cells we expect, so the
+ * register's actual meaning is "buffer-wide cells minus one" — we need
+ * to set it to match the WIDTH not the height. */
+#define ROT_IMG_VSIZE_CELLS 16   /* 128 / 8 */
 
 static void render_rot(void)
 {
@@ -362,12 +367,54 @@ static void render_rot(void)
    * the cleanest way to avoid jitter during the ASIC sequence. */
   asm volatile("move.w #0x2700, %sr");
 
+  /* Animation parameter: main passes dx (5.11 fixed-point) in COMCMD1.
+   * dx = 2048 → identity (1.0 px/output-px), dx = 4096 → 2x zoom in,
+   * dx = 1024 → 2x zoom out. Each output line's ystart scales by the
+   * inverse so the image scales uniformly. */
+  int16_t dx = (int16_t) *ga_reg_comcmd1;
+  if (dx == 0) dx = 2048;
+  /* ystart step per output line (13.3 px units). At dx=2048 step = 8
+   * (one input px per output px). step = (2048 << 3) / dx. */
+  int16_t step;
+  {
+    int32_t s = 16384;
+    asm volatile ("divs.w %1, %0" : "+d"(s) : "d"(dx) : "cc");
+    step = (int16_t) s;
+  }
+
   wait_2m_sub();
 
-  /* Stamp #1: 32x32 = 4×4 cells × 32 bytes/cell. Solid colour-1. */
+  /* Stamp #1: 32x32 = 4×4 cells × 32 bytes/cell, laid out as cell-rows of
+   * column 0, then column 1, etc. Pattern: a centred 4-px-wide "+" cross
+   * in colour 1 on a colour-0 (transparent) background, so scaling is
+   * actually visible (vs a solid block where you can't see motion).
+   *
+   * Build it pixel-by-pixel (32x32 4bpp = 1024 nibbles → 512 bytes), then
+   * pack into the ASIC's cell layout. */
   {
-    volatile uint8_t * p = WORD_RAM_SUB + ROT_STAMP_DATA_OFF + (4 * 4 * 32 * 1);
-    for (uint16_t i = 0; i < 512; ++i) *p++ = 0x11;
+    uint8_t pixels[32 * 32];          /* one nibble per byte, easy to write */
+    for (uint16_t i = 0; i < 32 * 32; ++i) pixels[i] = 0;
+    for (uint8_t r = 0; r < 32; ++r) {
+      /* horizontal stroke: rows 14-17 across the width */
+      if (r >= 14 && r <= 17)
+        for (uint8_t c = 0; c < 32; ++c) pixels[r * 32 + c] = 1;
+      /* vertical stroke: cols 14-17 across the height */
+      for (uint8_t c = 14; c <= 17; ++c) pixels[r * 32 + c] = 1;
+    }
+    /* Pack into 4x4 cells × 32 bytes (column-major: cell (col, row) at
+     * offset (col*4 + row)*32). */
+    volatile uint8_t * dst = WORD_RAM_SUB + ROT_STAMP_DATA_OFF + (4 * 4 * 32 * 1);
+    for (uint8_t col = 0; col < 4; ++col) {
+      for (uint8_t row = 0; row < 4; ++row) {
+        for (uint8_t py = 0; py < 8; ++py) {
+          uint8_t cx = col * 8, cy = row * 8 + py;
+          *dst++ = (uint8_t) ((pixels[cy * 32 + cx + 0] << 4) | pixels[cy * 32 + cx + 1]);
+          *dst++ = (uint8_t) ((pixels[cy * 32 + cx + 2] << 4) | pixels[cy * 32 + cx + 3]);
+          *dst++ = (uint8_t) ((pixels[cy * 32 + cx + 4] << 4) | pixels[cy * 32 + cx + 5]);
+          *dst++ = (uint8_t) ((pixels[cy * 32 + cx + 6] << 4) | pixels[cy * 32 + cx + 7]);
+        }
+      }
+    }
   }
 
   /* Stamp map: 16×16 entries, all stamp #1. */
@@ -376,16 +423,17 @@ static void render_rot(void)
     for (uint16_t i = 0; i < 16 * 16; ++i) *m++ = 0x0001;
   }
 
-  /* Trace-vector table: identity raster scan.
-   *   xstart = 0, ystart = line*8, dx = 1.0, dy = 0
-   * Position units 13.3 (1 px = 8); delta units 5.11 (1.0 = 2048). */
+  /* Trace-vector table: uniform scaled raster scan.
+   *   xstart = 0, ystart = line*step, dx = dx, dy = 0 */
   {
     volatile int16_t * t = (volatile int16_t *) (WORD_RAM_SUB + ROT_TRACE_TBL_OFF);
+    int16_t y = 0;
     for (uint16_t line = 0; line < ROT_IMG_H; ++line) {
       *t++ = 0;
-      *t++ = (int16_t) (line << 3);
-      *t++ = (int16_t) 2048;
+      *t++ = y;
+      *t++ = dx;
       *t++ = 0;
+      y += step;
     }
   }
 
