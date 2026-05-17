@@ -32,6 +32,44 @@
 #define ga_reg_comstat1     ((volatile uint16_t *) 0xFF8022)
 #define ga_reg_comflags_sub ((volatile uint8_t  *) 0xFF800F)
 
+/* WR-handshake byte (low byte of MEMMODE = $FF8003): bit0 RET, bit1 DMNA. */
+#define ga_memmode_lo       ((volatile uint8_t  *) 0xFF8003)
+
+/* ASIC stamp/map rotation engine. */
+#define ga_reg_stampsize      ((volatile uint16_t *) 0xFF8058)
+#define ga_reg_stampmapbase   ((volatile uint16_t *) 0xFF805A)
+#define ga_reg_imgbufvsize    ((volatile uint16_t *) 0xFF805C)
+#define ga_reg_imgbufstart    ((volatile uint16_t *) 0xFF805E)
+#define ga_reg_imgbufoffset   ((volatile uint16_t *) 0xFF8060)
+#define ga_reg_imgbufhdotsize ((volatile uint16_t *) 0xFF8062)
+#define ga_reg_imgbufvdotsize ((volatile uint16_t *) 0xFF8064)
+#define ga_reg_tracevectbase  ((volatile uint16_t *) 0xFF8066)
+
+/* Sub view of Word RAM is at $80000 (2M mode). */
+#define WORD_RAM_SUB ((volatile uint8_t *) 0x80000)
+
+/* Match megadev's reference inline-asm verbatim. Doing this in C with
+ * volatile bytes ought to be equivalent but mysteriously isn't on the
+ * sub side here — the C version returns "ownership transferred" too
+ * early and the first WR write stalls the sub. The btst-based asm
+ * spins on the actual hardware-latched DMNA bit and only exits when
+ * the gate array confirms the transfer is complete. */
+static inline void wait_2m_sub(void) {
+  asm volatile (
+    "1: btst  #1, 0xFF8003 \n\t"
+    "   beq.b 1b            \n\t"
+    ::: "cc"
+  );
+}
+static inline void grant_2m_sub(void) {
+  asm volatile (
+    "1: bset  #0, 0xFF8003 \n\t"
+    "   btst  #0, 0xFF8003 \n\t"
+    "   beq.b 1b            \n\t"
+    ::: "cc"
+  );
+}
+
 // Tiny libc / libgcc fill-ins so we don't have to link those libraries.
 
 // rand() — used by module.c for the random tremolo/vibrato waveform.
@@ -298,6 +336,76 @@ static Mod_t     g_mod;
 static MemFile_t g_mf;
 static uint8_t   g_mod_loaded = 0;
 
+/* ---- ASIC stamp/map render — MC-T3 tracer bullet ------------------------
+ * Lays down a solid-colour 32x32 stamp at stamp index 1, a 16x16 stamp map
+ * referencing that stamp everywhere, a trace-vector table for an identity
+ * scan (no rotate, no scale), fires the engine, polls until done, then
+ * returns Word RAM to the main CPU for DMA to VRAM.
+ *
+ * Word RAM layout (sub view, 2M mode):
+ *   $80000 + 0x00000  stamp data (stamp #1 at byte +512)
+ *   $80000 + 0x10000  stamp map  (16x16 entries, each 16-bit)
+ *   $80000 + 0x20000  trace vector table (128 entries × 8 bytes)
+ *   $80000 + 0x30000  image-buffer output (16x16 cells = 8 KB)
+ */
+#define ROT_STAMP_DATA_OFF  0x00000
+#define ROT_STAMP_MAP_OFF   0x10000
+#define ROT_TRACE_TBL_OFF   0x20000
+#define ROT_IMG_BUF_OFF     0x30000
+#define ROT_IMG_W           128
+#define ROT_IMG_H           128
+
+static void render_rot(void)
+{
+  /* Mask interrupts for the duration. Mode 1 cart vectors are only partly
+   * set (we install RTE stubs at boot for INT1/2/4/5/6/7) but masking is
+   * the cleanest way to avoid jitter during the ASIC sequence. */
+  asm volatile("move.w #0x2700, %sr");
+
+  wait_2m_sub();
+
+  /* Stamp #1: 32x32 = 4×4 cells × 32 bytes/cell. Solid colour-1. */
+  {
+    volatile uint8_t * p = WORD_RAM_SUB + ROT_STAMP_DATA_OFF + (4 * 4 * 32 * 1);
+    for (uint16_t i = 0; i < 512; ++i) *p++ = 0x11;
+  }
+
+  /* Stamp map: 16×16 entries, all stamp #1. */
+  {
+    volatile uint16_t * m = (volatile uint16_t *) (WORD_RAM_SUB + ROT_STAMP_MAP_OFF);
+    for (uint16_t i = 0; i < 16 * 16; ++i) *m++ = 0x0001;
+  }
+
+  /* Trace-vector table: identity raster scan.
+   *   xstart = 0, ystart = line*8, dx = 1.0, dy = 0
+   * Position units 13.3 (1 px = 8); delta units 5.11 (1.0 = 2048). */
+  {
+    volatile int16_t * t = (volatile int16_t *) (WORD_RAM_SUB + ROT_TRACE_TBL_OFF);
+    for (uint16_t line = 0; line < ROT_IMG_H; ++line) {
+      *t++ = 0;
+      *t++ = (int16_t) (line << 3);
+      *t++ = (int16_t) 2048;
+      *t++ = 0;
+    }
+  }
+
+  /* ASIC config — stampsize last (it gates how the rest are interpreted). */
+  *ga_reg_stampmapbase   = (uint16_t) (ROT_STAMP_MAP_OFF >> 2);
+  *ga_reg_imgbufstart    = (uint16_t) (ROT_IMG_BUF_OFF  >> 2);
+  *ga_reg_imgbufvdotsize = ROT_IMG_H;
+  *ga_reg_imgbufhdotsize = ROT_IMG_W;
+  *ga_reg_imgbufvsize    = (uint16_t) ((ROT_IMG_H / 8) - 1);
+  *ga_reg_imgbufoffset   = 0;
+  *ga_reg_stampsize      = 0x07;       /* REPEAT | 32x32 | 16x16-SCREEN */
+
+  /* Writing tracevectbase fires the engine. Poll the busy bit until done. */
+  *ga_reg_tracevectbase  = (uint16_t) (ROT_TRACE_TBL_OFF >> 2);
+  while (*ga_reg_stampsize & 0x8000) asm volatile ("nop");
+
+  grant_2m_sub();
+  asm volatile("move.w #0x2000, %sr");
+}
+
 static void stop_and_release(void)
 {
   if (g_mod_loaded) {
@@ -328,6 +436,17 @@ __attribute__((section(".init"))) void main()
   *ga_reg_comflags_sub = 0x20;
 
   *((volatile uint32_t *) 0x006C) = 0x00005F82;
+
+  /* Install a safe RTE for every unset autovector (INT1, INT2, INT4..7) so
+   * that if any of them fires we don't jump into garbage. Mode 1 cart has
+   * no BIOS to manage these for us. 0x4E73 = `rte` opcode. */
+  *((volatile uint16_t *) 0x000400) = 0x4E73;
+  *((volatile uint32_t *) 0x000064) = 0x00000400;       /* INT1 */
+  *((volatile uint32_t *) 0x000068) = 0x00000400;       /* INT2 hblank */
+  *((volatile uint32_t *) 0x000070) = 0x00000400;       /* INT4 CDC */
+  *((volatile uint32_t *) 0x000074) = 0x00000400;       /* INT5 CDD */
+  *((volatile uint32_t *) 0x000078) = 0x00000400;       /* INT6 subcode */
+  *((volatile uint32_t *) 0x00007C) = 0x00000400;       /* INT7 */
   *ga_reg_comflags_sub = 0x30;
 
   asm volatile("move.w #0x2000, %sr");
@@ -369,6 +488,10 @@ __attribute__((section(".init"))) void main()
       case CMD_STOP_MOD:
         stop_and_release();
         *ga_reg_comflags_sub &= ~0x80;
+        break;
+
+      case CMD_RENDER_ROT:
+        render_rot();
         break;
     }
 

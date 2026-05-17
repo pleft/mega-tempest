@@ -148,6 +148,30 @@ static void mcd_stop_mod(void)
   *GA_REG_COMCMD0_W = CMD_STOP_MOD;
 }
 
+/* Main-side WR ownership: bit 0 RETURN_2M (sub gave it back), bit 1 DMNA. */
+#define GA_MEMMODE_LO ((volatile u8 *) 0xA12003)
+static inline u8 wait_2m_main_to(u32 t) {
+  while (!(*GA_MEMMODE_LO & 0x01) && t) t--;
+  return t ? 1 : 0;
+}
+static inline u8 grant_2m_main_to(u32 t) {
+  do {
+    *GA_MEMMODE_LO |= 0x02;
+    if (*GA_MEMMODE_LO & 0x02) return 1;
+  } while (t--);
+  return 0;
+}
+
+static void mcd_render_rot(void)
+{
+  grant_2m_main_to(0x80000);                              /* hand WR to sub */
+  *GA_REG_COMCMD0_W = CMD_RENDER_ROT;
+  while (*GA_REG_COMSTAT0_W != CMD_RENDER_ROT) ;          /* sub processed */
+  *GA_REG_COMCMD0_W = 0;
+  while (*GA_REG_COMSTAT0_W != 0) ;
+  wait_2m_main_to(0x40000);                               /* WR back to main */
+}
+
 static void mcd_wait_ack(u16 expected)
 {
   while (*GA_REG_COMSTAT0_W != expected) ;
@@ -333,6 +357,98 @@ static void clear_play_area(void)
   for (u8 y = 4; y < 27; ++y) {
     vdp_ctrl_32 = plane_xy(0, y);
     for (u8 x = 0; x < 40; ++x) vdp_data = ' ';
+  }
+}
+
+// Forward decls — the scenes call each other across file order.
+static void install_title(void);
+static void title_main_thread(void);
+static void play_main_thread(void);
+
+// ---- Scene: TRANSFORM DEMO (MC-T3 tracer) --------------------------------
+//
+// Runs the Mega CD ASIC stamp/map rotation engine once, DMAs its output to
+// VRAM, displays it as a 16x16-tile block on plane B. The visual goal is
+// the simplest possible: a 128x128 solid-colour square. If the square
+// shows up, every leg of the pipeline (WR handshake, ASIC config, ASIC
+// fire/poll, WR → VRAM DMA, plane B tilemap) is working.
+
+#define ROT_TILE_BASE_IDX  0x300            /* tile slot for rendered image */
+#define ROT_TILE_VRAM_ADDR (ROT_TILE_BASE_IDX * 32)
+#define ROT_WORD_RAM_IMG   ((u8 *) 0x630000)   /* Mode 1 main view of WR + 0x30000 */
+#define ROT_DMA_WORDS      (16 * 16 * 32 / 2)  /* 16x16 cells × 32 bytes /2 = 4096 */
+
+static void rot_dma_image_to_vram(void)
+{
+  /* DMA enable, do the transfer, DMA back to "armed off". */
+  u16 const mode2_dma_on  = VDP_REG_MODE2 | VDP_MD_DISPLAY_MODE | VDP_VBLANK_ENABLE
+                          | VIDEO_SIGNAL | VDP_DISPLAY_ENABLE | VDP_DMA_ENABLE;
+  u16 const mode2_dma_off = mode2_dma_on & ~VDP_DMA_ENABLE;
+  vdp_ctrl = mode2_dma_on;
+  vdp_dma_transfer(ROT_WORD_RAM_IMG,
+                   to_vdp_addr(ROT_TILE_VRAM_ADDR) | VRAM_W,
+                   (u16) ROT_DMA_WORDS);
+  vdp_ctrl = mode2_dma_off;
+}
+
+static void rot_paint_plane_b(void)
+{
+  /* 16x16 block of tile-map entries on plane B, centred-ish at (12, 6). */
+  for (u8 row = 0; row < 16; ++row) {
+    u16 plane_b_addr = 0x4000 + ((6 + row) * 64 + 12) * 2;
+    vdp_ctrl_32 = to_vdp_addr(plane_b_addr) | VRAM_W;
+    for (u8 col = 0; col < 16; ++col)
+      vdp_data = (u16) (ROT_TILE_BASE_IDX + row * 16 + col);
+  }
+}
+
+static void rot_clear_plane_b(void)
+{
+  for (u8 row = 0; row < 16; ++row) {
+    u16 plane_b_addr = 0x4000 + ((6 + row) * 64 + 12) * 2;
+    vdp_ctrl_32 = to_vdp_addr(plane_b_addr) | VRAM_W;
+    for (u8 col = 0; col < 16; ++col) vdp_data = 0;
+  }
+}
+
+static void xform_always_vblank(void) { return; }
+static void xform_gated_vblank (void) { return; }
+static void xform_main_thread  (void);
+
+static void install_xform_demo(void)
+{
+  g_engine.always_vblank = xform_always_vblank;
+  g_engine.gated_vblank  = xform_gated_vblank;
+  g_engine.main_thread   = xform_main_thread;
+  g_engine.paused        = 0;
+  g_scene_dirty          = 1;
+
+  if (g_mcd_present && g_music_playing) {
+    mcd_stop_mod();
+    mcd_wait_ack(CMD_STOP_MOD);
+    g_music_playing = 0;
+  }
+}
+
+static void xform_main_thread(void)
+{
+  if (g_scene_dirty) {
+    clear_play_area();
+    print("MC-T3 ASIC TRACER",  plane_xy(11, 3));
+    if (!g_mcd_present) {
+      print("NO MEGA CD DETECTED — DEMO REQUIRES IT", plane_xy(2, 14));
+    } else {
+      mcd_render_rot();
+      rot_dma_image_to_vram();
+      rot_paint_plane_b();
+    }
+    print("B = TITLE",  plane_xy(2, 27));
+    g_scene_dirty = 0;
+  }
+
+  if (p1_single & PAD_B) {
+    rot_clear_plane_b();
+    install_title();
   }
 }
 
@@ -594,14 +710,16 @@ static void title_main_thread(void)
 {
   if (g_scene_dirty) {
     clear_play_area();
-    print("TEMPEST 2000",        plane_xy(14, 6));
-    print("MEGA CD PORT (MC-T1a)", plane_xy(9, 8));
-    print("MCD:",                 plane_xy(2, 12));
+    print("TEMPEST 2000",       plane_xy(14, 6));
+    print("MEGA CD PORT",       plane_xy(14, 8));
+    print("MCD:",               plane_xy(2, 12));
     print(g_mcd_present ? "PRESENT" : "ABSENT ", plane_xy(7, 12));
-    print("PRESS START",          plane_xy(14, 16));
+    print("START = PLAY",       plane_xy(13, 16));
+    print("    C = ASIC DEMO",  plane_xy(13, 17));
     g_scene_dirty = 0;
   }
   if (p1_single & PAD_START) install_playfield();
+  if (p1_single & PAD_C)     install_xform_demo();
 }
 
 static void play_main_thread(void)
@@ -713,7 +831,10 @@ void main(void)
     print(digits, plane_xy(9, 25));
 
     // Scene-name indicator — proves the handler swap actually happened.
-    print((g_engine.main_thread == title_main_thread) ? "TITLE" : "PLAY ",
-          plane_xy(27, 25));
+    char const * scene_name = "?    ";
+    if      (g_engine.main_thread == title_main_thread) scene_name = "TITLE";
+    else if (g_engine.main_thread == play_main_thread)  scene_name = "PLAY ";
+    else if (g_engine.main_thread == xform_main_thread) scene_name = "XFORM";
+    print(scene_name, plane_xy(27, 25));
   }
 }
