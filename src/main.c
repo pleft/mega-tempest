@@ -162,15 +162,17 @@ static inline u8 grant_2m_main_to(u32 t) {
   return 0;
 }
 
-static void mcd_render_rot(u16 dx)
+/* fill_color: palette index 0..15 to fill the entire plane-B ASIC region with. */
+static void mcd_render_rot(u8 fill_color)
 {
-  *GA_REG_COMCMD1_W = dx;                                 /* animation param */
-  grant_2m_main_to(0x80000);                              /* hand WR to sub */
+  u8 byte = (u8) ((fill_color << 4) | (fill_color & 0x0F));
+  *GA_REG_COMCMD1_W = byte;
+  grant_2m_main_to(0x80000);
   *GA_REG_COMCMD0_W = CMD_RENDER_ROT;
-  while (*GA_REG_COMSTAT0_W != CMD_RENDER_ROT) ;          /* sub processed */
+  while (*GA_REG_COMSTAT0_W != CMD_RENDER_ROT) ;
   *GA_REG_COMCMD0_W = 0;
   while (*GA_REG_COMSTAT0_W != 0) ;
-  wait_2m_main_to(0x40000);                               /* WR back to main */
+  wait_2m_main_to(0x40000);
 }
 
 static void mcd_wait_ack(u16 expected)
@@ -446,15 +448,15 @@ static void xform_main_thread(void)
   }
 
   if (g_mcd_present) {
-    /* Animate: dx (5.11) oscillates 1024..3072 over ~2 sec. Triangle
-     * wave via the low 7 bits of the frame counter (0..127), with the
-     * top bit flipping direction. */
+    /* XFORM scene now cycles colour through palette indices 1..15 (then
+     * back) — a quick demo that per-frame sub-rendered repaints are real
+     * and run at 60 fps. */
     static u16 anim = 0;
     anim++;
-    u16 phase = anim & 0xFF;                /* 0..255 over ~4 sec */
-    if (phase > 127) phase = 255 - phase;   /* 0..127 up, then down */
-    u16 dx = 1024 + (phase << 4);           /* 1024..3072 */
-    mcd_render_rot(dx);
+    u8 phase = (u8) (anim >> 3);              /* slow it down a bit */
+    u8 c = phase & 0x0F;
+    if (c == 0) c = 1;
+    mcd_render_rot(c);
     rot_dma_image_to_vram();
     rot_paint_plane_b();
   }
@@ -484,6 +486,7 @@ static void install_title(void)
     mcd_wait_ack(CMD_STOP_MOD);
     g_music_playing = 0;
   }
+  rot_clear_plane_b();         // wipe gameplay/xform ASIC bg before TITLE
 }
 
 // ---- Scene: PLAYFIELD (web + player) -------------------------------------
@@ -596,6 +599,11 @@ static void install_playfield(void)
     mcd_play_mod(res_rave4_mod.size);
     mcd_wait_ack(CMD_PLAY_MOD);
     g_music_playing = 1;
+
+    // Sub-rendered bg: solid colour-4 block on plane B behind the web.
+    mcd_render_rot(4);
+    rot_dma_image_to_vram();
+    rot_paint_plane_b();
   }
 
   g_player = entity_spawn();
@@ -792,12 +800,12 @@ void main(void)
   clear_vram();
   clear_vsram();
 
-  // Palette: black bg, white text, plus an accent — first colours pulled
-  // from the megadev default palette as a known-good starting point.
-  cram[0]  = 0x0000;          // transparent
-  cram[1]  = 0x0eee;          // white text
-  cram[2]  = 0x008e;          // accent red
-  cram[15] = 0x0aaa;          // dim
+  // Palette
+  cram[0]  = 0x0000;          // transparent (black)
+  cram[1]  = 0x0eee;          // white — text, web, entities (plane A)
+  cram[2]  = 0x008e;          // legacy accent
+  cram[4]  = 0x0E00;          // bright blue — sub-rendered background (plane B)
+  cram[15] = 0x0aaa;          // dim gray
   update_cram();
 
   init_joypads();
