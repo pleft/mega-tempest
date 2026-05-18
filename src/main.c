@@ -433,6 +433,65 @@ static void rot_clear_plane_b(void)
 
 static u8 g_web_buf[WEB_BUF_BYTES];
 
+/* ---- VDP hardware sprite tile data for enemies (MC-T6) -----------------
+ * Three size variants of a filled diamond for "flipper" enemy. Selection
+ * driven by depth_fp at render time (smaller at centre, larger at rim).
+ *   FAR  =  8x8  ( 1 tile,  32 bytes,  VRAM tile $400)
+ *   MID  = 16x16 ( 4 tiles, 128 bytes, VRAM tile $410..$413)
+ *   NEAR = 24x24 ( 9 tiles, 288 bytes, VRAM tile $420..$428)
+ * Sprite multi-tile layout is column-major: tile 0 = top-left, tile 1 =
+ * below it, tile (height) = top of next column. */
+
+#define FLIPPER_TILE_FAR   0x400        /* 8x8  = 1 tile  */
+#define FLIPPER_TILE_MID   0x410        /* 16x16 = 4 tiles */
+#define FLIPPER_TILE_NEAR  0x420        /* 24x24 = 9 tiles */
+
+#define DIAMOND_PAL  2                  /* palette index for enemy sprites */
+
+/* Procedurally generate a filled-diamond sprite of N×N pixels (N must be
+ * a multiple of 8) into `out` in VDP tile format, column-major across
+ * the sprite's tiles. out must have N*N/2 bytes available. */
+static void make_diamond(u8 N, u8 pal, u8 * out)
+{
+  /* Zero out the buffer first. */
+  u16 total_bytes = (u16) ((u16) N * N / 2);
+  for (u16 i = 0; i < total_bytes; ++i) out[i] = 0;
+
+  u8 tiles_per_col = (u8) (N / 8);
+  u8 center = (u8) (N / 2);
+
+  for (u8 row = 0; row < N; ++row) {
+    /* For a filled diamond: half-width at row R = min(R, N-1-R) + 1.
+     * Pixels lit at columns [center-half, center+half-1]. */
+    u8 d = (row < center) ? row : (u8) (N - 1 - row);
+    u8 half = (u8) (d + 1);
+    s16 lo = (s16) center - half;
+    s16 hi = (s16) center + half - 1;
+    for (s16 col = lo; col <= hi; ++col) {
+      u8 tile_col = (u8) (col / 8);
+      u8 tile_row = (u8) (row / 8);
+      u8 local_col = (u8) (col & 7);
+      u8 local_row = (u8) (row & 7);
+      /* Column-major: tile_index = tile_col * tiles_per_col + tile_row. */
+      u16 tile_idx = (u16) ((u16) tile_col * tiles_per_col + tile_row);
+      u16 byte_off = (u16) (tile_idx * 32 + local_row * 4 + local_col / 2);
+      if (local_col & 1)
+        out[byte_off] |= (pal & 0x0F);
+      else
+        out[byte_off] |= (u8) ((pal & 0x0F) << 4);
+    }
+  }
+}
+
+/* Sprite size encoding: VDP byte 2, bits 3-2 = V size-1, bits 1-0 = H size-1.
+ *  1x1: 0x00,  2x2: 0x05,  3x3: 0x0A,  4x4: 0x0F
+ * Plus the VRAM tile base and the half-extent for centring on (px, py). */
+typedef struct { u8 size_byte; u16 tile_base; u8 half; } SpriteSizeDef;
+static const SpriteSizeDef FLIPPER_SIZES[2] = {
+  { 0x00, FLIPPER_TILE_FAR, 4 },       /*  8x8 — far / centre */
+  { 0x05, FLIPPER_TILE_MID, 8 },       /* 16x16 — near / rim  */
+};
+
 /* 16-lane rim offsets — one table per web shape. Each lane's (dx, dy) is
  * the offset from the web centre to that lane's rim point, in pixels.
  * Lane 0 points "down" (+Y), going clockwise to lane 15. */
@@ -602,6 +661,79 @@ static void web_dma_main_to_vram(void)
   vdp_ctrl = mode2_dma_off;
 }
 
+/* Generate and DMA all 3 flipper sprite size variants to VRAM. */
+static u8 g_sprite_gen_buf[24 * 24 / 2];     /* big enough for largest */
+
+static void load_enemy_sprites_to_vram(void)
+{
+  u16 const mode2_dma_on  = VDP_REG_MODE2 | VDP_MD_DISPLAY_MODE | VDP_VBLANK_ENABLE
+                          | VIDEO_SIGNAL | VDP_DISPLAY_ENABLE | VDP_DMA_ENABLE;
+  u16 const mode2_dma_off = mode2_dma_on & ~VDP_DMA_ENABLE;
+  vdp_ctrl = VDP_REG_AUTOINC | 2;
+
+  /* 8x8 → tile FLIPPER_TILE_FAR (32 bytes = 16 words) */
+  make_diamond(8, DIAMOND_PAL, g_sprite_gen_buf);
+  vdp_ctrl = mode2_dma_on;
+  vdp_dma_transfer((char const *) g_sprite_gen_buf,
+                   to_vdp_addr(FLIPPER_TILE_FAR * 32) | VRAM_W,
+                   16);
+  vdp_ctrl = mode2_dma_off;
+
+  /* 16x16 → FLIPPER_TILE_MID (128 bytes = 64 words) */
+  make_diamond(16, DIAMOND_PAL, g_sprite_gen_buf);
+  vdp_ctrl = mode2_dma_on;
+  vdp_dma_transfer((char const *) g_sprite_gen_buf,
+                   to_vdp_addr(FLIPPER_TILE_MID * 32) | VRAM_W,
+                   64);
+  vdp_ctrl = mode2_dma_off;
+
+  /* (24x24 size variant removed — felt oversized vs the 120-px web.) */
+}
+
+/* Walk active entity list and write the VDP sprite attribute table.
+ * One sprite per FLIPPER. Other entity types still use plane-A text
+ * glyphs. Sprite 0 is always present; hide it off-screen if no flippers. */
+#define SPR_TABLE_VRAM 0xb800
+#define SPR_MAX 32
+
+static void render_enemy_sprites(void)
+{
+  /* Build the sprite table in a local buffer, then DMA-or-write to VRAM.
+   * 4 words per sprite × SPR_MAX = 128 words. */
+  static u16 spr_buf[SPR_MAX * 4];
+  u8 n = 0;
+  for (Entity * e = g_active_head; e; e = e->next) {
+    if (e->type != E_FLIPPER) continue;
+    if (n >= SPR_MAX) break;
+    s16 px = web_pixel_x(e->lane, e->depth_fp);
+    s16 py = web_pixel_y(e->lane, e->depth_fp);
+    /* Pick size based on depth_fp: small near centre, large near rim.
+     * Threshold at FP_ONE/2 splits the two size bands. */
+    u8 size_idx = (e->depth_fp < 0x8000) ? 0 : 1;
+    const SpriteSizeDef * sz = &FLIPPER_SIZES[size_idx];
+    spr_buf[n * 4 + 0] = (u16) (py + 128 - sz->half);            /* Y */
+    spr_buf[n * 4 + 1] = (u16) (((u16) sz->size_byte << 8) | (n + 1));
+    spr_buf[n * 4 + 2] = sz->tile_base;
+    spr_buf[n * 4 + 3] = (u16) (px + 128 - sz->half);            /* X */
+    n++;
+  }
+  if (n == 0) {
+    /* Sprite 0 hidden off-screen, chain ends immediately. */
+    spr_buf[0] = 0;
+    spr_buf[1] = 0;
+    spr_buf[2] = 0;
+    spr_buf[3] = 0;
+    n = 1;
+  } else {
+    /* Terminate chain at last used sprite. */
+    spr_buf[(n - 1) * 4 + 1] &= 0xFF00;
+  }
+  /* Write sprite table via VDP data port. */
+  vdp_ctrl_32 = to_vdp_addr(SPR_TABLE_VRAM) | VRAM_W;
+  u16 const words = (u16) (n * 4);
+  for (u16 i = 0; i < words; ++i) vdp_data = spr_buf[i];
+}
+
 // ---- Scene: TITLE ---------------------------------------------------------
 
 static void title_always_vblank(void) { return; }
@@ -725,6 +857,10 @@ static void install_playfield(void)
     web_dma_main_to_vram();
     rot_paint_plane_b();
   }
+
+  /* Upload enemy sprite tile data on every PLAYFIELD install (also
+   * cheap; survives across scene swaps but harmless to redo). */
+  load_enemy_sprites_to_vram();
 
   g_player = entity_spawn();
   if (g_player) {
@@ -891,10 +1027,19 @@ static void play_main_thread(void)
     plane_putc(32, 27, (char) ('0' + (s % 10)));
   }
 
-  // Render every live entity at its (lane, depth_fp) computed pixel pos.
-  // On move, clear the previous cell with a space — the web lives on plane
-  // B now, so plane A just needs to be transparent under entities.
+  // Render every live entity. Flippers now use VDP hardware sprites
+  // (see render_enemy_sprites). Player + shot still draw as plane A
+  // text glyphs.
   for (Entity * e = g_active_head; e; e = e->next) {
+    if (e->type == E_FLIPPER) {
+      /* Clear prev cell if flipper used to be drawn on plane A
+       * (legacy state), then nothing more — sprite handles display. */
+      if (e->prev_cx >= 0) {
+        plane_putc((u16) e->prev_cx, (u16) e->prev_cy, ' ');
+        e->prev_cx = -1;
+      }
+      continue;
+    }
     s16 px = web_pixel_x(e->lane, e->depth_fp);
     s16 py = web_pixel_y(e->lane, e->depth_fp);
     s16 cx = px >> 3;
@@ -905,6 +1050,9 @@ static void play_main_thread(void)
     e->prev_cx = cx;
     e->prev_cy = cy;
   }
+
+  /* Write VDP sprite table for flippers. */
+  render_enemy_sprites();
 
   // Lane index display, two digits.
   plane_putc(34, 3, (char) ('0' + (g_player_lane / 10)));
@@ -928,23 +1076,15 @@ void main(void)
   clear_vram();
   clear_vsram();
 
-  // Palette — 15 distinct colours for tile-byte mapping diagnostic
-  cram[0]  = 0x0000;          // 0 black
-  cram[1]  = 0x00E0;          // 1 green
-  cram[2]  = 0x000E;          // 2 red
-  cram[3]  = 0x0E00;          // 3 blue
-  cram[4]  = 0x00EE;          // 4 yellow
-  cram[5]  = 0x0E0E;          // 5 magenta
-  cram[6]  = 0x0EE0;          // 6 cyan
-  cram[7]  = 0x0EEE;          // 7 white
-  cram[8]  = 0x0088;          // 8 dim red
-  cram[9]  = 0x0808;          // 9 dim magenta
-  cram[10] = 0x0880;          // A dim cyan
-  cram[11] = 0x0086;          // B orange
-  cram[12] = 0x0600;          // C dim blue
-  cram[13] = 0x0060;          // D dim green
-  cram[14] = 0x0006;          // E dim red 2
-  cram[15] = 0x0AAA;          // F gray
+  /* Palette: black bg, white text/UI, red enemies, yellow web.
+   * Explicit zero-init the whole 64-entry array first so unset slots
+   * don't take garbage values from un-init'd .bss. */
+  for (u8 i = 0; i < 64; ++i) cram[i] = 0;
+  cram[0]  = 0x0000;          // 0 transparent / black
+  cram[1]  = 0x0EEE;          // 1 white   — text, UI, player
+  cram[2]  = 0x000E;          // 2 red     — enemy sprites
+  cram[4]  = 0x00EE;          // 4 yellow  — web lines
+  cram[15] = 0x0AAA;          // 15 gray   — dim accent
   update_cram();
 
   init_joypads();
