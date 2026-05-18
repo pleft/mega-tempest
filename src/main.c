@@ -383,6 +383,11 @@ static void play_main_thread(void);
 
 static void rot_dma_image_to_vram(void)
 {
+  /* Explicitly re-set autoinc=2 right before DMA, in case anything
+   * else has touched the VDP register. Sequential word DMA writes need
+   * a 2-byte stride per word. */
+  vdp_ctrl = VDP_REG_AUTOINC | 2;
+
   /* DMA enable, do the transfer, DMA back to "armed off". */
   u16 const mode2_dma_on  = VDP_REG_MODE2 | VDP_MD_DISPLAY_MODE | VDP_VBLANK_ENABLE
                           | VIDEO_SIGNAL | VDP_DISPLAY_ENABLE | VDP_DMA_ENABLE;

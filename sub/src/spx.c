@@ -389,10 +389,11 @@ static uint8_t   g_mod_loaded = 0;
  * issues — the bulk-copy writes longs sequentially with no intervening
  * reads or other writes, which the hardware/emulator should handle
  * cleanly. */
-/* Staging buffer at sub PRG-RAM $20000 (within mod_sample_buf range, but
- * only touched during InitMOD which finishes long before render_rot). */
+/* Staging buffer at sub PRG-RAM $1000 — well outside mod_sample_buf
+ * ($20000-$3FFFF), pattern_buf ($40000-$5FFFF), and MOD file bytes
+ * ($60000-$7FFFF). The area $400-$FFFF is otherwise free. */
 #define STAGE_BYTES (16 * 16 * 32)             /* 8192 bytes */
-#define G_IMG_STAGE ((uint8_t *) 0x20000)
+#define G_IMG_STAGE ((uint8_t *) 0x1000)
 
 static void img_clear(uint8_t pal_pair)
 {
@@ -414,13 +415,25 @@ static inline void img_setpx(int16_t x, int16_t y, uint8_t pal)
     *dst = (uint8_t) ((*dst & 0x0F) | ((pal & 0x0F) << 4));
 }
 
-/* Tight bulk copy from PRG-RAM staging to WR IMG buffer.
- * 8192 bytes / 4 = 2048 longs, copied with move.l (a0)+, (a1)+. */
+/* Explicit-asm bulk copy from PRG-RAM staging to WR IMG buffer using
+ * WORD writes (not long). 8192 bytes = 4096 words. Word writes have
+ * proven reliable in our solid-fill tests; long writes appear to lose
+ * the second word externally on the Mega CD sub-bus. */
 static void img_flush_to_wr(void)
 {
-  uint32_t * src = (uint32_t *) G_IMG_STAGE;
-  volatile uint32_t * dst = (volatile uint32_t *) (WORD_RAM_SUB + ROT_IMG_BUF_OFF);
-  for (uint16_t i = 0; i < STAGE_BYTES / 4; ++i) dst[i] = src[i];
+  uint8_t * src       = G_IMG_STAGE;
+  uint8_t * dst       = (uint8_t *) (WORD_RAM_SUB + ROT_IMG_BUF_OFF);
+  asm volatile (
+    "movea.l %[s], %%a0          \n\t"
+    "movea.l %[d], %%a1          \n\t"
+    "move.w  #4095, %%d0         \n\t"
+    "1:                          \n\t"
+    "move.w  (%%a0)+, (%%a1)+   \n\t"
+    "dbra    %%d0, 1b            \n\t"
+    :
+    : [s] "r"(src), [d] "r"(dst)
+    : "d0", "a0", "a1", "cc", "memory"
+  );
 }
 
 /* Bresenham line drawn with a full 2x2 brush at each step — at 45° the
@@ -434,8 +447,7 @@ static void img_line(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint8_t pal
   int16_t sy = (y0 < y1) ? 1 : -1;
   int16_t err = dx + dy;
   while (1) {
-    /* 2x2 brush for thickness. Writes go to PRG-RAM staging — fast +
-     * reliable. */
+    /* 2x2 brush. */
     img_setpx(x0,     y0,     pal);
     img_setpx(x0 + 1, y0,     pal);
     img_setpx(x0,     y0 + 1, pal);
