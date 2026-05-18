@@ -250,13 +250,16 @@ static s16 g_lane_rim_y[NUM_LANES];
 extern const s8 (* const WEB_RIMS[])[2];
 extern u8 g_web_shape;
 extern const u8 WEB_SHAPE_COUNT_EXT;
+static inline s16 web_scale(s8 v);
 
 static void web_init(void)
 {
   const s8 (*rim)[2] = WEB_RIMS[g_web_shape];
   for (u8 i = 0; i < NUM_LANES; ++i) {
-    g_lane_rim_x[i] = (s16) (WEB_CENTER_X + rim[i][0]);
-    g_lane_rim_y[i] = (s16) (WEB_CENTER_Y + rim[i][1]);
+    /* Scale rim coords (base radius 60) → render radius 80 so entity
+     * paths match the bigger plane-B web. */
+    g_lane_rim_x[i] = (s16) (WEB_CENTER_X + web_scale(rim[i][0]));
+    g_lane_rim_y[i] = (s16) (WEB_CENTER_Y + web_scale(rim[i][1]));
   }
 }
 
@@ -373,8 +376,16 @@ static void play_main_thread(void);
 // shows up, every leg of the pipeline (WR handshake, ASIC config, ASIC
 // fire/poll, WR → VRAM DMA, plane B tilemap) is working.
 
-#define ROT_TILE_BASE_IDX  0x300            /* tile slot for rendered image */
+/* MC-T6b: 24x24 cell web (= 576 tiles). Tile base $280 puts the tile
+ * data at VRAM $5000..$97DF, just after plane B's tilemap ($4000-$4FFF)
+ * and before the sprite table at $B800. Sprite tile slots moved up to
+ * $4C0+ so they don't overlap the web tile range. */
+#define ROT_TILE_BASE_IDX  0x280
 #define ROT_TILE_VRAM_ADDR (ROT_TILE_BASE_IDX * 32)
+/* Plane B paint position — top-left cell of the 24x24 web region,
+ * centred on screen pixel (160, 112). */
+#define PLANE_B_PAINT_COL  8
+#define PLANE_B_PAINT_ROW  2
 #define ROT_WORD_RAM_IMG   ((u8 *) 0x630000)   /* Mode 1 main view of WR + 0x30000 */
 #define ROT_DMA_WORDS      (16 * 16 * 32 / 2)  /* 16x16 cells × 32 bytes /2 = 4096 */
 
@@ -399,23 +410,20 @@ static void rot_dma_image_to_vram(void)
 
 static void rot_paint_plane_b(void)
 {
-  /* Diagnostic mode: show 16 columns × 16 rows in plane-B order, tile
-   * index = row*16 + col. Whatever shape we see (16x8 / 8x16 / 16x16)
-   * tells us how the engine laid out the buffer. */
-  for (u8 row = 0; row < 16; ++row) {
-    u16 plane_b_addr = 0x4000 + ((6 + row) * 64 + 12) * 2;
+  for (u8 row = 0; row < 24; ++row) {
+    u16 plane_b_addr = 0x4000 + ((PLANE_B_PAINT_ROW + row) * 64 + PLANE_B_PAINT_COL) * 2;
     vdp_ctrl_32 = to_vdp_addr(plane_b_addr) | VRAM_W;
-    for (u8 col = 0; col < 16; ++col)
-      vdp_data = (u16) (ROT_TILE_BASE_IDX + row * 16 + col);
+    for (u8 col = 0; col < 24; ++col)
+      vdp_data = (u16) (ROT_TILE_BASE_IDX + row * 24 + col);
   }
 }
 
 static void rot_clear_plane_b(void)
 {
-  for (u8 row = 0; row < 16; ++row) {
-    u16 plane_b_addr = 0x4000 + ((6 + row) * 64 + 12) * 2;
+  for (u8 row = 0; row < 24; ++row) {
+    u16 plane_b_addr = 0x4000 + ((PLANE_B_PAINT_ROW + row) * 64 + PLANE_B_PAINT_COL) * 2;
     vdp_ctrl_32 = to_vdp_addr(plane_b_addr) | VRAM_W;
-    for (u8 col = 0; col < 16; ++col) vdp_data = 0;
+    for (u8 col = 0; col < 24; ++col) vdp_data = 0;
   }
 }
 
@@ -427,11 +435,23 @@ static void rot_clear_plane_b(void)
 // the standard MD pattern. If this produces clean diagonals, the bug really
 // is specific to the WR pipeline we used previously.
 
-#define WEB_IMG_W 128
-#define WEB_IMG_H 128
-#define WEB_BUF_BYTES (16 * 16 * 32)     // 8192 bytes = 16x16 tiles × 32
+#define WEB_IMG_W   192
+#define WEB_IMG_H   192
+#define WEB_CELLS_W 24
+#define WEB_CELLS_H 24
+#define WEB_BUF_BYTES (WEB_CELLS_W * WEB_CELLS_H * 32)   /* 18432 bytes */
 
 static u8 g_web_buf[WEB_BUF_BYTES];
+
+/* Scale base-radius-60 shape-table coords → render radius 80 (v * 4/3).
+ * Uses inline divs.w to avoid pulling __divsi3 from libgcc. */
+static inline s16 web_scale(s8 v)
+{
+  s32 t = (s32) v * 4;
+  s16 three = 3;
+  asm ("divs.w %1, %0" : "+d"(t) : "d"(three) : "cc");
+  return (s16) t;
+}
 
 /* ---- VDP hardware sprite tile data for enemies (MC-T6) -----------------
  * Three size variants of a filled diamond for "flipper" enemy. Selection
@@ -598,7 +618,7 @@ u8 g_web_shape = WEB_SHAPE_CIRCLE;
 static void web_setpx(s16 x, s16 y, u8 pal)
 {
   if ((u16) x >= WEB_IMG_W || (u16) y >= WEB_IMG_H) return;
-  u16 cell_off = (u16) ((y >> 3) * 16 + (x >> 3)) * 32;
+  u16 cell_off = (u16) ((y >> 3) * WEB_CELLS_W + (x >> 3)) * 32;
   u16 byte_off = (u16) ((y & 7) * 4 + ((x & 7) >> 1));
   u8 * dst = g_web_buf + cell_off + byte_off;
   if (x & 1)
@@ -628,22 +648,24 @@ static void web_render_main(u8 pal)
 {
   const s8 (*rim)[2] = WEB_RIMS[g_web_shape];
   for (u16 i = 0; i < WEB_BUF_BYTES; ++i) g_web_buf[i] = 0;
+  s16 const cx = WEB_IMG_W / 2;            /* 96 for 192-px buffer */
+  s16 const cy = WEB_IMG_H / 2;
 
-  /* 1. Radial lines from centre to each lane's rim point. */
+  /* 1. Radial lines from centre to each lane's scaled rim point. */
   for (u8 lane = 0; lane < 16; ++lane) {
-    s16 rx = (s16) (64 + rim[lane][0]);
-    s16 ry = (s16) (64 + rim[lane][1]);
-    web_line(64, 64, rx, ry, pal);
+    s16 rx = (s16) (cx + web_scale(rim[lane][0]));
+    s16 ry = (s16) (cy + web_scale(rim[lane][1]));
+    web_line(cx, cy, rx, ry, pal);
   }
 
   /* 2. Rim polygon — connect adjacent rim points so the web's outline
    * is visible (square edges, diamond edges, etc.). */
   for (u8 lane = 0; lane < 16; ++lane) {
     u8 next = (u8) ((lane + 1) & 0x0F);
-    s16 ax = (s16) (64 + rim[lane][0]);
-    s16 ay = (s16) (64 + rim[lane][1]);
-    s16 bx = (s16) (64 + rim[next][0]);
-    s16 by = (s16) (64 + rim[next][1]);
+    s16 ax = (s16) (cx + web_scale(rim[lane][0]));
+    s16 ay = (s16) (cy + web_scale(rim[lane][1]));
+    s16 bx = (s16) (cx + web_scale(rim[next][0]));
+    s16 by = (s16) (cy + web_scale(rim[next][1]));
     web_line(ax, ay, bx, by, pal);
   }
 }
