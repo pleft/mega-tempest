@@ -237,24 +237,26 @@ typedef s32 fp16;
 
 #define NUM_LANES      16
 #define WEB_CENTER_X  160
-#define WEB_CENTER_Y  128
+#define WEB_CENTER_Y  112       // matches plane-B IMG buffer centre
 #define WEB_DOT_STEPS   8     // dots per lane drawn from centre toward rim
 
-static const s16 WEB_RIM_OFFSET[NUM_LANES][2] = {
-  {   0,  80 }, {  31,  74 }, {  57,  57 }, {  74,  31 },
-  {  80,   0 }, {  74, -31 }, {  57, -57 }, {  31, -74 },
-  {   0, -80 }, { -31, -74 }, { -57, -57 }, { -74, -31 },
-  { -80,   0 }, { -74,  31 }, { -57,  57 }, { -31,  74 },
-};
-
+/* Entity positioning derives rim points from the current web shape's
+ * table (defined later, below). web_init populates these from
+ * WEB_RIMS[g_web_shape] each scene install. */
 static s16 g_lane_rim_x[NUM_LANES];
 static s16 g_lane_rim_y[NUM_LANES];
 
+/* Forward decl — WEB_RIMS lives below, after the per-shape tables. */
+extern const s8 (* const WEB_RIMS[])[2];
+extern u8 g_web_shape;
+extern const u8 WEB_SHAPE_COUNT_EXT;
+
 static void web_init(void)
 {
+  const s8 (*rim)[2] = WEB_RIMS[g_web_shape];
   for (u8 i = 0; i < NUM_LANES; ++i) {
-    g_lane_rim_x[i] = WEB_CENTER_X + WEB_RIM_OFFSET[i][0];
-    g_lane_rim_y[i] = WEB_CENTER_Y + WEB_RIM_OFFSET[i][1];
+    g_lane_rim_x[i] = (s16) (WEB_CENTER_X + rim[i][0]);
+    g_lane_rim_y[i] = (s16) (WEB_CENTER_Y + rim[i][1]);
   }
 }
 
@@ -270,11 +272,6 @@ static inline s16 web_pixel_y(u8 lane, fp16 depth_fp)
 }
 
 // Precomputed (cx, cy) cell of each web dot, so we can repaint a single
-// lane's rim cell when the player vacates it (depth index WEB_DOT_STEPS-1
-// is the rim).
-static u8 g_web_dot_cx[NUM_LANES][WEB_DOT_STEPS];
-static u8 g_web_dot_cy[NUM_LANES][WEB_DOT_STEPS];
-
 // ---- Entity pool (doc 10) -------------------------------------------------
 
 #define ENTITY_POOL_SIZE 32
@@ -381,6 +378,7 @@ static void play_main_thread(void);
 #define ROT_WORD_RAM_IMG   ((u8 *) 0x630000)   /* Mode 1 main view of WR + 0x30000 */
 #define ROT_DMA_WORDS      (16 * 16 * 32 / 2)  /* 16x16 cells × 32 bytes /2 = 4096 */
 
+__attribute__((unused))
 static void rot_dma_image_to_vram(void)
 {
   /* Explicitly re-set autoinc=2 right before DMA, in case anything
@@ -435,12 +433,61 @@ static void rot_clear_plane_b(void)
 
 static u8 g_web_buf[WEB_BUF_BYTES];
 
-static const s8 WEB_RIM_60[16][2] = {
+/* 16-lane rim offsets — one table per web shape. Each lane's (dx, dy) is
+ * the offset from the web centre to that lane's rim point, in pixels.
+ * Lane 0 points "down" (+Y), going clockwise to lane 15. */
+
+static const s8 WEB_RIM_CIRCLE[16][2] = {
   {   0,  60 }, {  23,  55 }, {  42,  42 }, {  55,  23 },
   {  60,   0 }, {  55, -23 }, {  42, -42 }, {  23, -55 },
   {   0, -60 }, { -23, -55 }, { -42, -42 }, { -55, -23 },
   { -60,   0 }, { -55,  23 }, { -42,  42 }, { -23,  55 },
 };
+
+static const s8 WEB_RIM_SQUARE[16][2] = {
+  {   0,  60 }, {  25,  60 }, {  60,  60 }, {  60,  25 },
+  {  60,   0 }, {  60, -25 }, {  60, -60 }, {  25, -60 },
+  {   0, -60 }, { -25, -60 }, { -60, -60 }, { -60, -25 },
+  { -60,   0 }, { -60,  25 }, { -60,  60 }, { -25,  60 },
+};
+
+/* PLUS / cross — cardinal arms reach out, diagonals are pulled back. */
+static const s8 WEB_RIM_PLUS[16][2] = {
+  {   0,  60 }, {   8,  25 }, {  15,  15 }, {  25,   8 },
+  {  60,   0 }, {  25,  -8 }, {  15, -15 }, {   8, -25 },
+  {   0, -60 }, {  -8, -25 }, { -15, -15 }, { -25,  -8 },
+  { -60,   0 }, { -25,   8 }, { -15,  15 }, {  -8,  25 },
+};
+
+/* Diamond — like square but rotated 45°. Cardinals are far, diagonals
+ * are mid. */
+static const s8 WEB_RIM_DIAMOND[16][2] = {
+  {   0,  60 }, {  15,  45 }, {  30,  30 }, {  45,  15 },
+  {  60,   0 }, {  45, -15 }, {  30, -30 }, {  15, -45 },
+  {   0, -60 }, { -15, -45 }, { -30, -30 }, { -45, -15 },
+  { -60,   0 }, { -45,  15 }, { -30,  30 }, { -15,  45 },
+};
+
+typedef enum {
+  WEB_SHAPE_CIRCLE = 0,
+  WEB_SHAPE_SQUARE,
+  WEB_SHAPE_PLUS,
+  WEB_SHAPE_DIAMOND,
+  WEB_SHAPE_COUNT,
+} WebShape;
+
+static const char * const WEB_SHAPE_NAMES[WEB_SHAPE_COUNT] = {
+  "CIRCLE ", "SQUARE ", "PLUS   ", "DIAMOND",
+};
+
+const s8 (* const WEB_RIMS[WEB_SHAPE_COUNT])[2] = {
+  WEB_RIM_CIRCLE,
+  WEB_RIM_SQUARE,
+  WEB_RIM_PLUS,
+  WEB_RIM_DIAMOND,
+};
+
+u8 g_web_shape = WEB_SHAPE_CIRCLE;
 
 static void web_setpx(s16 x, s16 y, u8 pal)
 {
@@ -462,11 +509,8 @@ static void web_line(s16 x0, s16 y0, s16 x1, s16 y1, u8 pal)
   s16 sy = (y0 < y1) ? 1 : -1;
   s16 err = dx + dy;
   while (1) {
-    /* 2x2 brush. */
-    web_setpx(x0,     y0,     pal);
-    web_setpx((s16)(x0 + 1), y0,     pal);
-    web_setpx(x0,     (s16)(y0 + 1), pal);
-    web_setpx((s16)(x0 + 1), (s16)(y0 + 1), pal);
+    /* Single-pixel line — vector-graphics Tempest feel. */
+    web_setpx(x0, y0, pal);
     if (x0 == x1 && y0 == y1) break;
     s16 e2 = (s16) (err << 1);
     if (e2 >= dy) { err += dy; x0 = (s16) (x0 + sx); }
@@ -476,11 +520,25 @@ static void web_line(s16 x0, s16 y0, s16 x1, s16 y1, u8 pal)
 
 static void web_render_main(u8 pal)
 {
+  const s8 (*rim)[2] = WEB_RIMS[g_web_shape];
   for (u16 i = 0; i < WEB_BUF_BYTES; ++i) g_web_buf[i] = 0;
+
+  /* 1. Radial lines from centre to each lane's rim point. */
   for (u8 lane = 0; lane < 16; ++lane) {
-    s16 rx = (s16) (64 + WEB_RIM_60[lane][0]);
-    s16 ry = (s16) (64 + WEB_RIM_60[lane][1]);
+    s16 rx = (s16) (64 + rim[lane][0]);
+    s16 ry = (s16) (64 + rim[lane][1]);
     web_line(64, 64, rx, ry, pal);
+  }
+
+  /* 2. Rim polygon — connect adjacent rim points so the web's outline
+   * is visible (square edges, diamond edges, etc.). */
+  for (u8 lane = 0; lane < 16; ++lane) {
+    u8 next = (u8) ((lane + 1) & 0x0F);
+    s16 ax = (s16) (64 + rim[lane][0]);
+    s16 ay = (s16) (64 + rim[lane][1]);
+    s16 bx = (s16) (64 + rim[next][0]);
+    s16 by = (s16) (64 + rim[next][1]);
+    web_line(ax, ay, bx, by, pal);
   }
 }
 
@@ -495,57 +553,6 @@ static void web_dma_main_to_vram(void)
                    to_vdp_addr(ROT_TILE_VRAM_ADDR) | VRAM_W,
                    (u16) (WEB_BUF_BYTES / 2));
   vdp_ctrl = mode2_dma_off;
-}
-
-static void xform_always_vblank(void) { return; }
-static void xform_gated_vblank (void) { return; }
-static void xform_main_thread  (void);
-
-static void install_xform_demo(void)
-{
-  g_engine.always_vblank = xform_always_vblank;
-  g_engine.gated_vblank  = xform_gated_vblank;
-  g_engine.main_thread   = xform_main_thread;
-  g_engine.paused        = 0;
-  g_scene_dirty          = 1;
-
-  if (g_mcd_present && g_music_playing) {
-    mcd_stop_mod();
-    mcd_wait_ack(CMD_STOP_MOD);
-    g_music_playing = 0;
-  }
-}
-
-static void xform_main_thread(void)
-{
-  if (g_scene_dirty) {
-    clear_play_area();
-    print("MC-T3 ASIC TRACER",  plane_xy(11, 3));
-    print("B = TITLE",          plane_xy(2, 27));
-    g_scene_dirty = 0;
-    if (!g_mcd_present) {
-      print("NO MEGA CD DETECTED — DEMO REQUIRES IT", plane_xy(2, 14));
-    }
-  }
-
-  if (g_mcd_present) {
-    /* XFORM scene now cycles colour through palette indices 1..15 (then
-     * back) — a quick demo that per-frame sub-rendered repaints are real
-     * and run at 60 fps. */
-    static u16 anim = 0;
-    anim++;
-    u8 phase = (u8) (anim >> 3);              /* slow it down a bit */
-    u8 c = phase & 0x0F;
-    if (c == 0) c = 1;
-    mcd_render_rot(c);
-    rot_dma_image_to_vram();
-    rot_paint_plane_b();
-  }
-
-  if (p1_single & PAD_B) {
-    rot_clear_plane_b();
-    install_title();
-  }
 }
 
 // ---- Scene: TITLE ---------------------------------------------------------
@@ -630,23 +637,8 @@ static void kill_flipper(Entity * e)
   entity_kill(e);
 }
 
-static void draw_web_once(void)
-{
-  for (u8 lane = 0; lane < NUM_LANES; ++lane) {
-    for (u8 d = 1; d <= WEB_DOT_STEPS; ++d) {
-      // depth_fp = (d * FP_ONE) / 8 — shift since 8 is power-of-2 so
-      // we don't pull __udivsi3 into the link.
-      fp16 depth_fp = ((fp16) d) << (16 - 3);
-      s16 px = web_pixel_x(lane, depth_fp);
-      s16 py = web_pixel_y(lane, depth_fp);
-      u8 cx = (u8) (px >> 3);
-      u8 cy = (u8) (py >> 3);
-      g_web_dot_cx[lane][d - 1] = cx;
-      g_web_dot_cy[lane][d - 1] = cy;
-      plane_putc(cx, cy, '.');
-    }
-  }
-}
+/* draw_web_once (text-dot web) retired in MC-T4b — web now renders as
+ * smooth pixel lines on plane B via web_render_main(). */
 
 static void play_always_vblank(void) { return; }
 static void play_gated_vblank (void);
@@ -817,11 +809,17 @@ static void title_main_thread(void)
     print("MCD:",               plane_xy(2, 12));
     print(g_mcd_present ? "PRESENT" : "ABSENT ", plane_xy(7, 12));
     print("START = PLAY",       plane_xy(13, 16));
-    print("    C = ASIC DEMO",  plane_xy(13, 17));
+    print("    C = NEXT SHAPE", plane_xy(13, 17));
+    print("WEB:",               plane_xy(2, 20));
     g_scene_dirty = 0;
   }
+  /* Show current shape name (dynamic so we can update on C-cycle). */
+  print(WEB_SHAPE_NAMES[g_web_shape], plane_xy(7, 20));
+
   if (p1_single & PAD_START) install_playfield();
-  if (p1_single & PAD_C)     install_xform_demo();
+  if (p1_single & PAD_C) {
+    g_web_shape = (u8) ((g_web_shape + 1) % WEB_SHAPE_COUNT);
+  }
 }
 
 static void play_main_thread(void)
@@ -949,7 +947,6 @@ void main(void)
     char const * scene_name = "?    ";
     if      (g_engine.main_thread == title_main_thread) scene_name = "TITLE";
     else if (g_engine.main_thread == play_main_thread)  scene_name = "PLAY ";
-    else if (g_engine.main_thread == xform_main_thread) scene_name = "XFORM";
     print(scene_name, plane_xy(27, 25));
   }
 }
