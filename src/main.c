@@ -421,6 +421,82 @@ static void rot_clear_plane_b(void)
   }
 }
 
+// ---- Main-CPU web renderer (MC-T5) ---------------------------------------
+//
+// Bypasses the flaky sub-WR-DMA pipeline by drawing the 16-lane web directly
+// into a main-RAM tile-data buffer and DMAing main RAM → VRAM. Plane B paint
+// is unchanged. Main-RAM access is well-understood; DMA from main RAM is
+// the standard MD pattern. If this produces clean diagonals, the bug really
+// is specific to the WR pipeline we used previously.
+
+#define WEB_IMG_W 128
+#define WEB_IMG_H 128
+#define WEB_BUF_BYTES (16 * 16 * 32)     // 8192 bytes = 16x16 tiles × 32
+
+static u8 g_web_buf[WEB_BUF_BYTES];
+
+static const s8 WEB_RIM_60[16][2] = {
+  {   0,  60 }, {  23,  55 }, {  42,  42 }, {  55,  23 },
+  {  60,   0 }, {  55, -23 }, {  42, -42 }, {  23, -55 },
+  {   0, -60 }, { -23, -55 }, { -42, -42 }, { -55, -23 },
+  { -60,   0 }, { -55,  23 }, { -42,  42 }, { -23,  55 },
+};
+
+static void web_setpx(s16 x, s16 y, u8 pal)
+{
+  if ((u16) x >= WEB_IMG_W || (u16) y >= WEB_IMG_H) return;
+  u16 cell_off = (u16) ((y >> 3) * 16 + (x >> 3)) * 32;
+  u16 byte_off = (u16) ((y & 7) * 4 + ((x & 7) >> 1));
+  u8 * dst = g_web_buf + cell_off + byte_off;
+  if (x & 1)
+    *dst = (u8) ((*dst & 0xF0) | (pal & 0x0F));
+  else
+    *dst = (u8) ((*dst & 0x0F) | ((pal & 0x0F) << 4));
+}
+
+static void web_line(s16 x0, s16 y0, s16 x1, s16 y1, u8 pal)
+{
+  s16 dx =  (s16) ((x1 > x0) ? (x1 - x0) : (x0 - x1));
+  s16 dy = -(s16) ((y1 > y0) ? (y1 - y0) : (y0 - y1));
+  s16 sx = (x0 < x1) ? 1 : -1;
+  s16 sy = (y0 < y1) ? 1 : -1;
+  s16 err = dx + dy;
+  while (1) {
+    /* 2x2 brush. */
+    web_setpx(x0,     y0,     pal);
+    web_setpx((s16)(x0 + 1), y0,     pal);
+    web_setpx(x0,     (s16)(y0 + 1), pal);
+    web_setpx((s16)(x0 + 1), (s16)(y0 + 1), pal);
+    if (x0 == x1 && y0 == y1) break;
+    s16 e2 = (s16) (err << 1);
+    if (e2 >= dy) { err += dy; x0 = (s16) (x0 + sx); }
+    if (e2 <= dx) { err += dx; y0 = (s16) (y0 + sy); }
+  }
+}
+
+static void web_render_main(u8 pal)
+{
+  for (u16 i = 0; i < WEB_BUF_BYTES; ++i) g_web_buf[i] = 0;
+  for (u8 lane = 0; lane < 16; ++lane) {
+    s16 rx = (s16) (64 + WEB_RIM_60[lane][0]);
+    s16 ry = (s16) (64 + WEB_RIM_60[lane][1]);
+    web_line(64, 64, rx, ry, pal);
+  }
+}
+
+static void web_dma_main_to_vram(void)
+{
+  u16 const mode2_dma_on  = VDP_REG_MODE2 | VDP_MD_DISPLAY_MODE | VDP_VBLANK_ENABLE
+                          | VIDEO_SIGNAL | VDP_DISPLAY_ENABLE | VDP_DMA_ENABLE;
+  u16 const mode2_dma_off = mode2_dma_on & ~VDP_DMA_ENABLE;
+  vdp_ctrl = VDP_REG_AUTOINC | 2;
+  vdp_ctrl = mode2_dma_on;
+  vdp_dma_transfer((char *) g_web_buf,
+                   to_vdp_addr(ROT_TILE_VRAM_ADDR) | VRAM_W,
+                   (u16) (WEB_BUF_BYTES / 2));
+  vdp_ctrl = mode2_dma_off;
+}
+
 static void xform_always_vblank(void) { return; }
 static void xform_gated_vblank (void) { return; }
 static void xform_main_thread  (void);
@@ -605,9 +681,9 @@ static void install_playfield(void)
     mcd_wait_ack(CMD_PLAY_MOD);
     g_music_playing = 1;
 
-    // Sub-rendered bg: solid colour-4 block on plane B behind the web.
-    mcd_render_rot(4);
-    rot_dma_image_to_vram();
+    // Main-CPU rendered web on plane B — bypasses the WR-DMA pipeline.
+    web_render_main(4);              /* yellow web with current palette */
+    web_dma_main_to_vram();
     rot_paint_plane_b();
   }
 
