@@ -387,13 +387,17 @@ static void img_clear(uint8_t pal_pair)
 static inline void img_setpx(int16_t x, int16_t y, uint8_t pal)
 {
   if ((uint16_t) x >= IMG_W || (uint16_t) y >= IMG_H) return;
+  /* WR access from Sub side appears to need long (32-bit) alignment —
+   * non-long-aligned word writes were dropping. Each cell row is exactly
+   * 4 bytes = one long containing all 8 pixels of that row. RMW the
+   * long. */
   uint16_t cell_off = (uint16_t) ((y >> 3) * 16 + (x >> 3)) * 32;
-  uint16_t byte_off = (uint16_t) ((y & 7) * 4 + ((x & 7) >> 1));
-  volatile uint8_t * dst = WORD_RAM_SUB + ROT_IMG_BUF_OFF + cell_off + byte_off;
-  if (x & 1)
-    *dst = (uint8_t) ((*dst & 0xF0) | (pal & 0x0F));
-  else
-    *dst = (uint8_t) ((*dst & 0x0F) | ((pal & 0x0F) << 4));
+  uint16_t long_off = (uint16_t) ((y & 7) * 4);
+  volatile uint32_t * dst = (volatile uint32_t *) (WORD_RAM_SUB + ROT_IMG_BUF_OFF + cell_off + long_off);
+  uint8_t  nib   = (uint8_t) (x & 7);
+  uint32_t mask  = (uint32_t) (0xF0000000ul >> (nib * 4));
+  uint32_t value = (uint32_t) ((uint32_t)(pal & 0x0F) << (28 - nib * 4));
+  *dst = (*dst & ~mask) | value;
 }
 
 /* Bresenham line drawn with a full 2x2 brush at each step — at 45° the
@@ -407,10 +411,11 @@ static void img_line(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint8_t pal
   int16_t sy = (y0 < y1) ? 1 : -1;
   int16_t err = dx + dy;
   while (1) {
-    img_setpx(x0,     y0,     pal);
-    img_setpx(x0 + 1, y0,     pal);
-    img_setpx(x0,     y0 + 1, pal);
-    img_setpx(x0 + 1, y0 + 1, pal);
+    /* 3x3 brush — diagnostic test: if gaps disappear, 2x2 was just too
+     * narrow for our Bresenham step. If gaps remain, deeper bug. */
+    for (int8_t dy_b = -1; dy_b <= 1; ++dy_b)
+      for (int8_t dx_b = -1; dx_b <= 1; ++dx_b)
+        img_setpx((int16_t)(x0 + dx_b), (int16_t)(y0 + dy_b), pal);
     if (x0 == x1 && y0 == y1) break;
     int16_t e2 = (int16_t) (err << 1);
     if (e2 >= dy) { err += dy; x0 = (int16_t) (x0 + sx); }
@@ -428,18 +433,17 @@ static const int8_t WEB_RIM[16][2] = {
   { -60,   0 }, { -55,  23 }, { -42,  42 }, { -23,  55 },
 };
 
-/* MC-T4b: render the 16-lane Tempest web as crisp pixel lines into the
- * IMG buffer. main passes the line colour as palette-index pair in
- * COMCMD1's low byte. */
 static void render_rot(void)
 {
   asm volatile("move.w #0x2700, %sr");
   wait_2m_sub();
 
   uint8_t pal = (uint8_t) (*ga_reg_comcmd1 & 0x0F);
-  if (pal == 0) pal = 4;        /* default colour 4 */
+  if (pal == 0) pal = 4;
 
-  img_clear(0x00);              /* black background */
+  img_clear(0x00);
+
+  /* MC-T4b retest with word-based img_setpx: draw the 16-lane web again. */
   for (uint8_t lane = 0; lane < 16; ++lane) {
     int16_t rim_x = (int16_t) (64 + WEB_RIM[lane][0]);
     int16_t rim_y = (int16_t) (64 + WEB_RIM[lane][1]);

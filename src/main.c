@@ -802,12 +802,23 @@ void main(void)
   clear_vram();
   clear_vsram();
 
-  // Palette
-  cram[0]  = 0x0000;          // transparent (black)
-  cram[1]  = 0x0eee;          // white — text, web, entities (plane A)
-  cram[2]  = 0x008e;          // legacy accent
-  cram[4]  = 0x0E00;          // bright blue — sub-rendered background (plane B)
-  cram[15] = 0x0aaa;          // dim gray
+  // Palette — 15 distinct colours for tile-byte mapping diagnostic
+  cram[0]  = 0x0000;          // 0 black
+  cram[1]  = 0x00E0;          // 1 green
+  cram[2]  = 0x000E;          // 2 red
+  cram[3]  = 0x0E00;          // 3 blue
+  cram[4]  = 0x00EE;          // 4 yellow
+  cram[5]  = 0x0E0E;          // 5 magenta
+  cram[6]  = 0x0EE0;          // 6 cyan
+  cram[7]  = 0x0EEE;          // 7 white
+  cram[8]  = 0x0088;          // 8 dim red
+  cram[9]  = 0x0808;          // 9 dim magenta
+  cram[10] = 0x0880;          // A dim cyan
+  cram[11] = 0x0086;          // B orange
+  cram[12] = 0x0600;          // C dim blue
+  cram[13] = 0x0060;          // D dim green
+  cram[14] = 0x0006;          // E dim red 2
+  cram[15] = 0x0AAA;          // F gray
   update_cram();
 
   init_joypads();
