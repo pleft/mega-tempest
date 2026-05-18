@@ -377,27 +377,50 @@ static uint8_t   g_mod_loaded = 0;
 #define IMG_W 128
 #define IMG_H 128
 
+/* MC-T4b workaround: framebuffer staging in Sub PRG-RAM.
+ *
+ * Word RAM writes from Sub side have non-obvious coherency / alignment
+ * quirks (see feedback_megacd_mode1_wr_write_coherency.md) — RMW writes
+ * at byte / word / long granularity all produced stippled diagonals.
+ *
+ * Build the framebuffer in PRG-RAM (writes there are guaranteed
+ * reliable), then bulk-copy to WR via a tight long-write loop right
+ * before grant_2m_sub. This sidesteps all the per-pixel WR write
+ * issues — the bulk-copy writes longs sequentially with no intervening
+ * reads or other writes, which the hardware/emulator should handle
+ * cleanly. */
+/* Staging buffer at sub PRG-RAM $20000 (within mod_sample_buf range, but
+ * only touched during InitMOD which finishes long before render_rot). */
+#define STAGE_BYTES (16 * 16 * 32)             /* 8192 bytes */
+#define G_IMG_STAGE ((uint8_t *) 0x20000)
+
 static void img_clear(uint8_t pal_pair)
 {
-  volatile uint16_t * p = (volatile uint16_t *) (WORD_RAM_SUB + ROT_IMG_BUF_OFF);
-  uint16_t w = (uint16_t) ((pal_pair << 8) | pal_pair);
-  for (uint16_t i = 0; i < 4096; ++i) p[i] = w;
+  uint32_t * p = (uint32_t *) G_IMG_STAGE;
+  uint32_t w = ((uint32_t) pal_pair << 24) | ((uint32_t) pal_pair << 16)
+             | ((uint32_t) pal_pair <<  8) |  (uint32_t) pal_pair;
+  for (uint16_t i = 0; i < STAGE_BYTES / 4; ++i) p[i] = w;
 }
 
 static inline void img_setpx(int16_t x, int16_t y, uint8_t pal)
 {
   if ((uint16_t) x >= IMG_W || (uint16_t) y >= IMG_H) return;
-  /* WR access from Sub side appears to need long (32-bit) alignment —
-   * non-long-aligned word writes were dropping. Each cell row is exactly
-   * 4 bytes = one long containing all 8 pixels of that row. RMW the
-   * long. */
   uint16_t cell_off = (uint16_t) ((y >> 3) * 16 + (x >> 3)) * 32;
-  uint16_t long_off = (uint16_t) ((y & 7) * 4);
-  volatile uint32_t * dst = (volatile uint32_t *) (WORD_RAM_SUB + ROT_IMG_BUF_OFF + cell_off + long_off);
-  uint8_t  nib   = (uint8_t) (x & 7);
-  uint32_t mask  = (uint32_t) (0xF0000000ul >> (nib * 4));
-  uint32_t value = (uint32_t) ((uint32_t)(pal & 0x0F) << (28 - nib * 4));
-  *dst = (*dst & ~mask) | value;
+  uint16_t byte_off = (uint16_t) ((y & 7) * 4 + ((x & 7) >> 1));
+  uint8_t * dst = G_IMG_STAGE + cell_off + byte_off;
+  if (x & 1)
+    *dst = (uint8_t) ((*dst & 0xF0) | (pal & 0x0F));
+  else
+    *dst = (uint8_t) ((*dst & 0x0F) | ((pal & 0x0F) << 4));
+}
+
+/* Tight bulk copy from PRG-RAM staging to WR IMG buffer.
+ * 8192 bytes / 4 = 2048 longs, copied with move.l (a0)+, (a1)+. */
+static void img_flush_to_wr(void)
+{
+  uint32_t * src = (uint32_t *) G_IMG_STAGE;
+  volatile uint32_t * dst = (volatile uint32_t *) (WORD_RAM_SUB + ROT_IMG_BUF_OFF);
+  for (uint16_t i = 0; i < STAGE_BYTES / 4; ++i) dst[i] = src[i];
 }
 
 /* Bresenham line drawn with a full 2x2 brush at each step — at 45° the
@@ -411,11 +434,12 @@ static void img_line(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint8_t pal
   int16_t sy = (y0 < y1) ? 1 : -1;
   int16_t err = dx + dy;
   while (1) {
-    /* 3x3 brush — diagnostic test: if gaps disappear, 2x2 was just too
-     * narrow for our Bresenham step. If gaps remain, deeper bug. */
-    for (int8_t dy_b = -1; dy_b <= 1; ++dy_b)
-      for (int8_t dx_b = -1; dx_b <= 1; ++dx_b)
-        img_setpx((int16_t)(x0 + dx_b), (int16_t)(y0 + dy_b), pal);
+    /* 2x2 brush for thickness. Writes go to PRG-RAM staging — fast +
+     * reliable. */
+    img_setpx(x0,     y0,     pal);
+    img_setpx(x0 + 1, y0,     pal);
+    img_setpx(x0,     y0 + 1, pal);
+    img_setpx(x0 + 1, y0 + 1, pal);
     if (x0 == x1 && y0 == y1) break;
     int16_t e2 = (int16_t) (err << 1);
     if (e2 >= dy) { err += dy; x0 = (int16_t) (x0 + sx); }
@@ -443,12 +467,15 @@ static void render_rot(void)
 
   img_clear(0x00);
 
-  /* MC-T4b retest with word-based img_setpx: draw the 16-lane web again. */
+  /* Draw the 16-lane Tempest web into the PRG-RAM staging framebuffer. */
   for (uint8_t lane = 0; lane < 16; ++lane) {
     int16_t rim_x = (int16_t) (64 + WEB_RIM[lane][0]);
     int16_t rim_y = (int16_t) (64 + WEB_RIM[lane][1]);
     img_line(64, 64, rim_x, rim_y, pal);
   }
+
+  /* Bulk-copy the assembled framebuffer to WR via a tight long-write loop. */
+  img_flush_to_wr();
 
   grant_2m_sub();
   asm volatile("move.w #0x2000, %sr");
