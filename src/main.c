@@ -468,16 +468,59 @@ static const s8 WEB_RIM_DIAMOND[16][2] = {
   { -60,   0 }, { -45,  15 }, { -30,  30 }, { -15,  45 },
 };
 
+/* Triangle — equilateral, pointing up. Lane 0 = bottom centre, lane 8
+ * = top apex, going clockwise. 5 lanes on bottom edge, 4 each on
+ * right + left edges (sharing corner lanes). */
+static const s8 WEB_RIM_TRIANGLE[16][2] = {
+  {   0,  30 }, {  13,  30 }, {  26,  30 }, {  39,  30 },
+  {  52,  30 }, {  39,   7 }, {  26, -15 }, {  13, -37 },
+  {   0, -60 }, { -13, -37 }, { -26, -15 }, { -39,   7 },
+  { -52,  30 }, { -39,  30 }, { -26,  30 }, { -13,  30 },
+};
+
+/* Octagon — 8-sided polygon, lane 0/2/4/...=vertices, 1/3/5/...=mid-
+ * points between adjacent vertices. */
+static const s8 WEB_RIM_OCTAGON[16][2] = {
+  {   0,  60 }, {  21,  51 }, {  42,  42 }, {  51,  21 },
+  {  60,   0 }, {  51, -21 }, {  42, -42 }, {  21, -51 },
+  {   0, -60 }, { -21, -51 }, { -42, -42 }, { -51, -21 },
+  { -60,   0 }, { -51,  21 }, { -42,  42 }, { -21,  51 },
+};
+
+/* Star — 8-pointed: even lanes at full radius 60, odd lanes pulled in
+ * to ~28 between points to create spikes. */
+static const s8 WEB_RIM_STAR[16][2] = {
+  {   0,  60 }, {  11,  28 }, {  42,  42 }, {  28,  11 },
+  {  60,   0 }, {  28, -11 }, {  42, -42 }, {  11, -28 },
+  {   0, -60 }, { -11, -28 }, { -42, -42 }, { -28, -11 },
+  { -60,   0 }, { -28,  11 }, { -42,  42 }, { -11,  28 },
+};
+
+/* Fan / Line — all 16 rim points along a horizontal line at +40,
+ * spread evenly from x=-60 to x=+60. Apex of fan at the centre, base
+ * at bottom. Player walks the bottom edge. */
+static const s8 WEB_RIM_FAN[16][2] = {
+  { -60,  40 }, { -52,  40 }, { -44,  40 }, { -36,  40 },
+  { -28,  40 }, { -20,  40 }, { -12,  40 }, {  -4,  40 },
+  {   4,  40 }, {  12,  40 }, {  20,  40 }, {  28,  40 },
+  {  36,  40 }, {  44,  40 }, {  52,  40 }, {  60,  40 },
+};
+
 typedef enum {
   WEB_SHAPE_CIRCLE = 0,
   WEB_SHAPE_SQUARE,
   WEB_SHAPE_PLUS,
   WEB_SHAPE_DIAMOND,
+  WEB_SHAPE_TRIANGLE,
+  WEB_SHAPE_OCTAGON,
+  WEB_SHAPE_STAR,
+  WEB_SHAPE_FAN,
   WEB_SHAPE_COUNT,
 } WebShape;
 
 static const char * const WEB_SHAPE_NAMES[WEB_SHAPE_COUNT] = {
-  "CIRCLE ", "SQUARE ", "PLUS   ", "DIAMOND",
+  "CIRCLE  ", "SQUARE  ", "PLUS    ", "DIAMOND ",
+  "TRIANGLE", "OCTAGON ", "STAR    ", "FAN     ",
 };
 
 const s8 (* const WEB_RIMS[WEB_SHAPE_COUNT])[2] = {
@@ -485,6 +528,10 @@ const s8 (* const WEB_RIMS[WEB_SHAPE_COUNT])[2] = {
   WEB_RIM_SQUARE,
   WEB_RIM_PLUS,
   WEB_RIM_DIAMOND,
+  WEB_RIM_TRIANGLE,
+  WEB_RIM_OCTAGON,
+  WEB_RIM_STAR,
+  WEB_RIM_FAN,
 };
 
 u8 g_web_shape = WEB_SHAPE_CIRCLE;
