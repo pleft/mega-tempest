@@ -20,6 +20,7 @@
 #include "memfile.h"
 #include "module.h"
 #include "pcm.h"
+#include "sfx_data.h"
 
 // Inline the sub-side gate-array comm registers we need. We avoid
 // megadev's <sub/gate_arr.h> because it pulls in megadev's types.h,
@@ -493,6 +494,64 @@ static void render_rot(void)
   asm volatile("move.w #0x2000, %sr");
 }
 
+// ---- SFX playback (RF5C164 channel 4; MOD claims 0-3) -------------------
+//
+// Phase 1: FIRE only. The sample blob is embedded in sfx_data.{c,h} and
+// already in RF5C164 sign-magnitude with a trailing $FF end-marker.
+// First play of each SFX uploads its blob to a fixed PCM RAM bank (then
+// the upload flag stays set for the rest of the session). Subsequent
+// plays just retrigger the channel.
+//
+// PCM RAM offset $B000 (bank 11) — sits high in the static-sample
+// region claimed by InitMOD ($0000-$BFFF). If rave4.mod's static samples
+// reach that bank we'll hear them clobbered; in practice they don't.
+
+#define SFX_CHANNEL    4
+#define SFX_BANK_FIRE  0xB0          /* PCM offset $B000 */
+
+#define PCM_PAN_REG    (*((volatile uint8_t *) 0xFF0003))
+
+/* No more lazy-upload flag — megadev sub doesn't zero .bss, so an
+ * uninit static flag was randomly non-zero on boot, skipping the
+ * upload and leaving loop pointers / channel state pointing at MOD's
+ * voice samples (we heard "Play" looping forever). Just upload every
+ * play — 257 bytes via pcm_cpy is microseconds. */
+
+static void sfx_play(uint8_t idx)
+{
+  if (idx != SFX_IDX_FIRE) return;          /* phase 1: FIRE only */
+
+  /* Upload the real T2K "Player Shot Normal" sample. SFX_FIRE was baked
+   * by tools/extract_mcd_sprites.py into sign-magnitude with a trailing
+   * $FF byte already in place. */
+  uint16_t base = (uint16_t) (SFX_BANK_FIRE << 8);
+  pcm_cpy(base, (void *) SFX_FIRE, (uint16_t) sizeof SFX_FIRE, 0);
+  uint16_t loop_off = (uint16_t) (base + sizeof SFX_FIRE - 1);
+
+  /* Mask interrupts during channel config so mod_tick (50 Hz timer) can't
+   * stomp PCM_CTRL between our register writes and send them to a wrong
+   * channel. Without this masking, mid-config interruption would silently
+   * misroute everything to whichever channel mod_tick was last servicing. */
+  asm volatile("move.w #0x2700, %sr");
+
+  pcm_set_ctrl((uint8_t) (0xC0 | SFX_CHANNEL));           /* chip on + select ch */
+  pcm_set_off(SFX_CHANNEL);
+  pcm_set_start(SFX_BANK_FIRE, 0);
+  /* Loop-start = the $FF terminator byte. After end-of-sample the chip
+   * wraps there and immediately re-reads $FF → effectively one-shot. */
+  pcm_set_loop(loop_off);
+  pcm_set_env(0xFF);                                       /* max volume */
+  /* PAN register layout: high nibble = L, low nibble = R. 0x88 = balanced
+   * mid (both ~50%). pcm_set_pan goes through pcm_lcf which mangles the
+   * value oddly for raw "max both"; writing the register directly. */
+  *((volatile uint8_t *) 0xFF0003) = 0xFF;                /* L=F, R=F (centre, loud) */
+  pcm_delay();
+  pcm_set_period(428);                                     /* Amiga C-2 ≈ 8363 Hz */
+  pcm_set_on(SFX_CHANNEL);
+
+  asm volatile("move.w #0x2000, %sr");
+}
+
 static void stop_and_release(void)
 {
   if (g_mod_loaded) {
@@ -520,6 +579,10 @@ __attribute__((section(".init"))) void main()
   asm volatile("move.w #0x2700, %sr");
 
   *((volatile uint8_t *) 0xFF0011) = 0xFF;
+  /* Initialise the RF5C164 unconditionally at boot so SFX can play even
+   * if MOD music never starts. InitMOD also calls this, which is harmless
+   * (both paths just zero the channel regs and turn the chip on). */
+  pcm_reset();
   *ga_reg_comflags_sub = 0x20;
 
   *((volatile uint32_t *) 0x006C) = 0x00005F82;
@@ -579,6 +642,10 @@ __attribute__((section(".init"))) void main()
 
       case CMD_RENDER_ROT:
         render_rot();
+        break;
+
+      case CMD_PLAY_SFX:
+        sfx_play((uint8_t) (*ga_reg_comcmd1 & 0xFF));
         break;
     }
 

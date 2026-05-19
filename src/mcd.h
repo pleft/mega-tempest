@@ -13,6 +13,7 @@ void mcd_init(void);                                /* once at boot, only if MCD
 void mcd_upload_mod(DataChunk const * mod);
 void mcd_play_mod(u32 size);
 void mcd_stop_mod(void);
+void mcd_play_sfx(u8 idx);                          /* idx = 0 FIRE / 1 HIT / 2 DEATH */
 void mcd_wait_ack(u16 expected);
 
 #endif

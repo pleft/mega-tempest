@@ -8,6 +8,7 @@
 #include "res.h"
 #include "entity.h"
 #include "mcd.h"
+#include "psg.h"
 #include "web.h"
 #include <main/io.h>
 #include <main/memmap.h>
@@ -193,6 +194,8 @@ static void spawn_shot(u8 lane)
   e->depth_fp     = FP_ONE;
   e->depth_vel_fp = -SHOT_INWARD_STEP;
   e->phase        = 0;
+  if (g_mcd_present) mcd_play_sfx(0);    /* 0 = FIRE — PCM sample on Mega CD */
+  else               sfx_fire();          /* PSG fallback when no Mega CD */
 }
 
 static void spawn_flipper(u8 lane)
@@ -346,6 +349,7 @@ static void play_gated_vblank(void)
             entity_kill(s);
             kill_flipper(f);
             g_score++;
+            sfx_hit();
             break;
           }
         }
@@ -364,6 +368,7 @@ static void play_gated_vblank(void)
         g_player_lane = 0;
         g_player->lane = 0;
         kill_flipper(f);
+        sfx_death();
         break;
       }
       f = f_next;
@@ -409,6 +414,7 @@ static void play_main_thread(void)
   plane_putc(35, 27, (char) ('0' + (s % 10))); s /= 10;
   plane_putc(34, 27, (char) ('0' + (s % 10)));
 
+
   /* All entities (player, shots, flippers) render via VDP hardware sprites. */
   render_sprites();
 
@@ -453,6 +459,7 @@ void main(void)
   if (g_mcd_present) mcd_init();
   g_music_playing = 0;
 
+  psg_init();
   install_title();
 
   vdp_ctrl = vdp_regs[1];        // display on
@@ -463,6 +470,7 @@ void main(void)
     vblank_done = false;
     g_engine.frame++;
 
+    psg_tick();
     if (g_engine.always_vblank) g_engine.always_vblank();
     if (!g_engine.paused && g_engine.gated_vblank) g_engine.gated_vblank();
     if (g_engine.main_thread)   g_engine.main_thread();

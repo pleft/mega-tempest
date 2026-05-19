@@ -71,6 +71,16 @@ void mcd_stop_mod(void)
   *GA_REG_COMCMD0_W = CMD_STOP_MOD;
 }
 
+/* Need to do the standard ack handshake — sub's command loop blocks
+ * after processing a command until main clears COMCMD0. Without this,
+ * sub gets stuck after the first SFX and ignores subsequent commands. */
+void mcd_play_sfx(u8 idx)
+{
+  *GA_REG_COMCMD1_W = (u16) idx;
+  *GA_REG_COMCMD0_W = CMD_PLAY_SFX;
+  mcd_wait_ack(CMD_PLAY_SFX);
+}
+
 void mcd_wait_ack(u16 expected)
 {
   while (*GA_REG_COMSTAT0_W != expected) ;

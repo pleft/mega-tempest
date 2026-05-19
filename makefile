@@ -35,6 +35,7 @@ $(PROJECT_ID).cart: \
 	main.c \
 	entity.c \
 	mcd.c \
+	psg.c \
 	web.c \
 	sprites.c \
 	mulsi3.s \
