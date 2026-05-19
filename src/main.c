@@ -1,11 +1,14 @@
-// Tempest 2000 — Mega CD Mode 1 cart.
-// MC-T2: + in-game MOD music via Sub CPU + RF5C164. On boot the spx.smd
-// sub module is uploaded once into PRG-RAM (only if a Mega CD is
-// attached). PLAYFIELD entry uploads & starts a MOD; B-out stops it.
+// Tempest 2000 — Mega CD Mode 1 cart, main entry point.
+//
+// Architecture: main = graphics + scene logic, sub = MOD music (see sub/).
+// Web rendering + enemy sprites live in web.c; entity pool in entity.c;
+// Mega CD comm-reg plumbing in mcd.c. This file owns VDP setup, joypad
+// input, scene installs + handlers (TITLE / PLAYFIELD), and the main loop.
 
 #include "res.h"
-#include "../sub/src/shared.h"
-#include <main/gate_arr.def.h>
+#include "entity.h"
+#include "mcd.h"
+#include "web.h"
 #include <main/io.h>
 #include <main/memmap.h>
 #include <main/vdp.h>
@@ -17,6 +20,12 @@
 #define SPRITE_TBL_ADDR 0xb800
 
 #define plane_xy(x, y) (to_vdp_addr(VDP_PLANE_POS(x, y, Width64) + PLANE_A_ADDR) | VRAM_W)
+
+#if VIDEO == PAL
+#define VIDEO_SIGNAL VDP_PAL_VIDEO
+#else
+#define VIDEO_SIGNAL 0
+#endif
 
 // ---- joypad ---------------------------------------------------------------
 
@@ -60,12 +69,6 @@ __attribute__((interrupt)) void INT6_VBLANK(void)
   vblank_done = true;
 }
 
-#if VIDEO == PAL
-#define VIDEO_SIGNAL VDP_PAL_VIDEO
-#else
-#define VIDEO_SIGNAL 0
-#endif
-
 static u16 const default_vdp_regs[] = {
   VDP_REG_MODE1 | VDP_HICOLOR_ENABLE,
   VDP_REG_MODE2 | VDP_MD_DISPLAY_MODE | VDP_VBLANK_ENABLE | VIDEO_SIGNAL | VDP_DISPLAY_ENABLE,
@@ -91,120 +94,26 @@ static void print(char const * s, vdp_addr pos)
   while (*s) vdp_data = *s++;
 }
 
-// ---- Mega CD plumbing -----------------------------------------------------
-
-#define GA_REG_MEMMODE_W      ((volatile u16 *) 0xA12002)
-#define GA_REG_SUBCTRL_B      ((volatile u8 *)  0xA12001)
-#define GA_REG_COMCMD0_W      ((volatile u16 *) 0xA12010)
-#define GA_REG_COMCMD1_W      ((volatile u16 *) 0xA12012)
-#define GA_REG_COMCMD2_W      ((volatile u16 *) 0xA12014)
-#define GA_REG_COMSTAT0_W     ((volatile u16 *) 0xA12020)
-#define PRG_RAM_WINDOW        ((volatile u16 *) 0x420000)
-
-static void sub_request_bus(void)     { *GA_REG_SUBCTRL_B = 0x02; while (!((*GA_REG_SUBCTRL_B) & 0x02)) ; }
-static void sub_release_and_run(void) { *GA_REG_SUBCTRL_B = 0x01; while (!((*GA_REG_SUBCTRL_B) & 0x01)) ; }
-
-static void copy_words(const u8 * src, volatile u16 * dst, u32 size_bytes)
+static void plane_putc(u16 cx, u16 cy, char c)
 {
-  u16 * s = (u16 *) src;
-  u32 n = (size_bytes + 1) >> 1;
-  while (n--) *dst++ = *s++;
+  vdp_ctrl_32 = plane_xy(cx, cy);
+  vdp_data = (u8) c;
 }
 
-// Once at boot: load spx.smd into sub-side $10000 with reset vectors at $0.
-static void mcd_init(void)
+static void clear_play_area(void)
 {
-  *GA_REG_MEMMODE_W = 0xff00;
-  *GA_REG_SUBCTRL_B = 0x03;
-  *GA_REG_SUBCTRL_B = 0x02;
-  *GA_REG_SUBCTRL_B = 0x00;
-  sub_request_bus();
-  *GA_REG_MEMMODE_W = 0x0000;
-  ((volatile u32 *) PRG_RAM_WINDOW)[0] = 0x00080000;  // SP
-  ((volatile u32 *) PRG_RAM_WINDOW)[1] = 0x00010000;  // PC = spx main
-  copy_words(res_spx.data, (volatile u16 *) 0x430000, res_spx.size);
-  sub_release_and_run();
-}
-
-// Upload MOD bytes into PRG-RAM bank 3 (sub $60000), then resume sub.
-static void mcd_upload_mod(DataChunk const * mod)
-{
-  sub_request_bus();
-  *GA_REG_MEMMODE_W = (3 << 6);
-  copy_words(mod->data, PRG_RAM_WINDOW, mod->size);
-  *GA_REG_MEMMODE_W = 0x0000;
-  sub_release_and_run();
-}
-
-static void mcd_play_mod(u32 size)
-{
-  *GA_REG_COMCMD1_W = (u16) (size >> 16);
-  *GA_REG_COMCMD2_W = (u16) (size & 0xFFFF);
-  *GA_REG_COMCMD0_W = CMD_PLAY_MOD;
-}
-
-static void mcd_stop_mod(void)
-{
-  *GA_REG_COMCMD0_W = CMD_STOP_MOD;
-}
-
-/* Main-side WR ownership: bit 0 RETURN_2M (sub gave it back), bit 1 DMNA. */
-#define GA_MEMMODE_LO ((volatile u8 *) 0xA12003)
-static inline u8 wait_2m_main_to(u32 t) {
-  while (!(*GA_MEMMODE_LO & 0x01) && t) t--;
-  return t ? 1 : 0;
-}
-static inline u8 grant_2m_main_to(u32 t) {
-  do {
-    *GA_MEMMODE_LO |= 0x02;
-    if (*GA_MEMMODE_LO & 0x02) return 1;
-  } while (t--);
-  return 0;
-}
-
-/* fill_color: palette index 0..15 to fill the entire plane-B ASIC region with. */
-static void mcd_render_rot(u8 fill_color)
-{
-  u8 byte = (u8) ((fill_color << 4) | (fill_color & 0x0F));
-  *GA_REG_COMCMD1_W = byte;
-  grant_2m_main_to(0x80000);
-  *GA_REG_COMCMD0_W = CMD_RENDER_ROT;
-  while (*GA_REG_COMSTAT0_W != CMD_RENDER_ROT) ;
-  *GA_REG_COMCMD0_W = 0;
-  while (*GA_REG_COMSTAT0_W != 0) ;
-  wait_2m_main_to(0x40000);
-}
-
-static void mcd_wait_ack(u16 expected)
-{
-  while (*GA_REG_COMSTAT0_W != expected) ;
-  *GA_REG_COMCMD0_W = 0;
-  while (*GA_REG_COMSTAT0_W != 0) ;
-}
-
-// ---- Mega CD detection (canonical three-check) ----------------------------
-
-static u8 detect_mega_cd(void)
-{
-  volatile u8  * hw_ver  = (volatile u8 *)  0xA10001;
-  volatile u32 * mcd_sig = (volatile u32 *) 0x400100;
-  u8 disk_bit_clear = (((*hw_ver) >> 5) & 1) == 0;
-  u8 sega_at_400100 = (*mcd_sig == 0x53454741);
-  *GA_REG_COMCMD0_W = 0xCAFE;
-  u16 rb = *GA_REG_COMCMD0_W;
-  u8 gate_writable = (rb == 0xCAFE);
-  *GA_REG_COMCMD0_W = 0;
-  return disk_bit_clear || sega_at_400100 || gate_writable;
+  for (u8 y = 4; y < 27; ++y) {
+    vdp_ctrl_32 = plane_xy(0, y);
+    for (u8 x = 0; x < 40; ++x) vdp_data = ' ';
+  }
 }
 
 // ---- Engine (doc 16) ------------------------------------------------------
 //
 // Three function pointers per scene:
-//   always_vblank — runs every VBlank no matter what (input, audio tick).
+//   always_vblank — runs every VBlank no matter what.
 //   gated_vblank  — runs every VBlank unless paused.
 //   main_thread   — runs on the main loop after gated_vblank fired this frame.
-// Scene transition is just a swap of all three pointers in g_engine.
-// Pattern matches Jaguar Tempest's main.s ($808900).
 
 typedef void (*Handler)(void);
 
@@ -222,548 +131,15 @@ static u8  g_mcd_present;
 static u8  g_music_playing;
 static u8  g_scene_dirty;     // set by install_*; main loop redraws static text
 
-// ---- Fixed-point ----------------------------------------------------------
-
-typedef s32 fp16;
-#define FP_ONE     ((fp16) 0x10000)
-#define FP_FROM_INT(i) (((s32)(i)) << 16)
-#define FP_INT(fp)     ((s16) ((fp) >> 16))
-
-// ---- Perspective web (md-port stage 15, doc 22) --------------------------
-//
-// 16 lanes evenly spaced around a circle, centre = (160, 128), radius 80.
-// Lane 0 = directly below centre; clockwise. Player walks the rim. Depth
-// 0 = centre (vanishing point); depth FP_ONE = rim.
-
-#define NUM_LANES      16
-#define WEB_CENTER_X  160
-#define WEB_CENTER_Y  112       // matches plane-B IMG buffer centre
-#define WEB_DOT_STEPS   8     // dots per lane drawn from centre toward rim
-
-/* Entity positioning derives rim points from the current web shape's
- * table (defined later, below). web_init populates these from
- * WEB_RIMS[g_web_shape] each scene install. */
-static s16 g_lane_rim_x[NUM_LANES];
-static s16 g_lane_rim_y[NUM_LANES];
-
-/* Forward decl — WEB_RIMS lives below, after the per-shape tables. */
-extern const s8 (* const WEB_RIMS[])[2];
-extern u8 g_web_shape;
-extern const u8 WEB_SHAPE_COUNT_EXT;
-static inline s16 web_scale(s8 v);
-
-static void web_init(void)
-{
-  const s8 (*rim)[2] = WEB_RIMS[g_web_shape];
-  for (u8 i = 0; i < NUM_LANES; ++i) {
-    /* Scale rim coords (base radius 60) → render radius 80 so entity
-     * paths match the bigger plane-B web. */
-    g_lane_rim_x[i] = (s16) (WEB_CENTER_X + web_scale(rim[i][0]));
-    g_lane_rim_y[i] = (s16) (WEB_CENTER_Y + web_scale(rim[i][1]));
-  }
-}
-
-static inline s16 web_pixel_x(u8 lane, fp16 depth_fp)
-{
-  s32 dx = (s32) g_lane_rim_x[lane] - WEB_CENTER_X;
-  return (s16) (WEB_CENTER_X + ((dx * depth_fp) >> 16));
-}
-static inline s16 web_pixel_y(u8 lane, fp16 depth_fp)
-{
-  s32 dy = (s32) g_lane_rim_y[lane] - WEB_CENTER_Y;
-  return (s16) (WEB_CENTER_Y + ((dy * depth_fp) >> 16));
-}
-
-// Precomputed (cx, cy) cell of each web dot, so we can repaint a single
-// ---- Entity pool (doc 10) -------------------------------------------------
-
-#define ENTITY_POOL_SIZE 32
-
-typedef struct Entity Entity;
-typedef enum { E_PLAYER = 1, E_SHOT = 2, E_FLIPPER = 3 } EntityType;
-
-struct Entity {
-  u8       type;
-  u8       alive;
-  u8       glyph;          // character used to draw at the entity's cell
-  u8       lane;           // 0..NUM_LANES-1 — which radial lane
-  fp16     depth_fp;       // 0 = centre (vanishing point), FP_ONE = rim
-  fp16     depth_vel_fp;   // per-tick depth_fp delta (negative = inward)
-  u8       phase;          // flipper: 0=descending, 1=rim-walking
-  u8       step_period;    // flipper: frames between rim-walk hops
-  u8       lifetime;       // flipper: countdown to next hop
-  u8       _pad;
-  s16      prev_cx, prev_cy;  // last drawn cell (for erase), -1 if never drawn
-  Entity * prev;
-  Entity * next;
-};
-
-static Entity   g_entity_pool[ENTITY_POOL_SIZE];
-static Entity * g_active_head;
-static Entity * g_free_head;
-static u16      g_active_count;
-
-static void pool_init(void)
-{
-  for (u8 i = 0; i < ENTITY_POOL_SIZE; ++i) {
-    g_entity_pool[i].alive = 0;
-    g_entity_pool[i].prev_cx = -1;
-    g_entity_pool[i].prev_cy = -1;
-    g_entity_pool[i].prev = 0;
-    g_entity_pool[i].next = (i + 1 < ENTITY_POOL_SIZE) ? &g_entity_pool[i + 1] : 0;
-  }
-  g_free_head    = &g_entity_pool[0];
-  g_active_head  = 0;
-  g_active_count = 0;
-}
-
-static Entity * entity_spawn(void)
-{
-  if (!g_free_head) return 0;
-  Entity * e = g_free_head;
-  g_free_head = e->next;
-
-  e->alive = 1;
-  e->prev_cx = -1;
-  e->prev_cy = -1;
-  e->prev = 0;
-  e->next = g_active_head;
-  if (g_active_head) g_active_head->prev = e;
-  g_active_head = e;
-  g_active_count++;
-  return e;
-}
-
-static void entity_kill(Entity * e)
-{
-  if (!e->alive) return;
-  e->alive = 0;
-  if (e->prev) e->prev->next = e->next;
-  else         g_active_head = e->next;
-  if (e->next) e->next->prev = e->prev;
-  e->next = g_free_head;
-  e->prev = 0;
-  g_free_head = e;
-  g_active_count--;
-}
-
-// ---- Render helpers -------------------------------------------------------
-
-static void plane_putc(u16 cx, u16 cy, char c)
-{
-  vdp_ctrl_32 = plane_xy(cx, cy);
-  vdp_data = (u8) c;
-}
-
-static void clear_play_area(void)
-{
-  for (u8 y = 4; y < 27; ++y) {
-    vdp_ctrl_32 = plane_xy(0, y);
-    for (u8 x = 0; x < 40; ++x) vdp_data = ' ';
-  }
-}
-
 // Forward decls — the scenes call each other across file order.
 static void install_title(void);
 static void title_main_thread(void);
 static void play_main_thread(void);
 
-// ---- Scene: TRANSFORM DEMO (MC-T3 tracer) --------------------------------
-//
-// Runs the Mega CD ASIC stamp/map rotation engine once, DMAs its output to
-// VRAM, displays it as a 16x16-tile block on plane B. The visual goal is
-// the simplest possible: a 128x128 solid-colour square. If the square
-// shows up, every leg of the pipeline (WR handshake, ASIC config, ASIC
-// fire/poll, WR → VRAM DMA, plane B tilemap) is working.
-
-/* MC-T6b: 24x24 cell web (= 576 tiles). Tile base $280 puts the tile
- * data at VRAM $5000..$97DF, just after plane B's tilemap ($4000-$4FFF)
- * and before the sprite table at $B800. Sprite tile slots moved up to
- * $4C0+ so they don't overlap the web tile range. */
-#define ROT_TILE_BASE_IDX  0x280
-#define ROT_TILE_VRAM_ADDR (ROT_TILE_BASE_IDX * 32)
-/* Plane B paint position — top-left cell of the 24x24 web region,
- * centred on screen pixel (160, 112). */
-#define PLANE_B_PAINT_COL  8
-#define PLANE_B_PAINT_ROW  2
-#define ROT_WORD_RAM_IMG   ((u8 *) 0x630000)   /* Mode 1 main view of WR + 0x30000 */
-#define ROT_DMA_WORDS      (16 * 16 * 32 / 2)  /* 16x16 cells × 32 bytes /2 = 4096 */
-
-__attribute__((unused))
-static void rot_dma_image_to_vram(void)
-{
-  /* Explicitly re-set autoinc=2 right before DMA, in case anything
-   * else has touched the VDP register. Sequential word DMA writes need
-   * a 2-byte stride per word. */
-  vdp_ctrl = VDP_REG_AUTOINC | 2;
-
-  /* DMA enable, do the transfer, DMA back to "armed off". */
-  u16 const mode2_dma_on  = VDP_REG_MODE2 | VDP_MD_DISPLAY_MODE | VDP_VBLANK_ENABLE
-                          | VIDEO_SIGNAL | VDP_DISPLAY_ENABLE | VDP_DMA_ENABLE;
-  u16 const mode2_dma_off = mode2_dma_on & ~VDP_DMA_ENABLE;
-  vdp_ctrl = mode2_dma_on;
-  vdp_dma_transfer(ROT_WORD_RAM_IMG,
-                   to_vdp_addr(ROT_TILE_VRAM_ADDR) | VRAM_W,
-                   (u16) ROT_DMA_WORDS);
-  vdp_ctrl = mode2_dma_off;
-}
-
-static void rot_paint_plane_b(void)
-{
-  for (u8 row = 0; row < 24; ++row) {
-    u16 plane_b_addr = 0x4000 + ((PLANE_B_PAINT_ROW + row) * 64 + PLANE_B_PAINT_COL) * 2;
-    vdp_ctrl_32 = to_vdp_addr(plane_b_addr) | VRAM_W;
-    for (u8 col = 0; col < 24; ++col)
-      vdp_data = (u16) (ROT_TILE_BASE_IDX + row * 24 + col);
-  }
-}
-
-static void rot_clear_plane_b(void)
-{
-  for (u8 row = 0; row < 24; ++row) {
-    u16 plane_b_addr = 0x4000 + ((PLANE_B_PAINT_ROW + row) * 64 + PLANE_B_PAINT_COL) * 2;
-    vdp_ctrl_32 = to_vdp_addr(plane_b_addr) | VRAM_W;
-    for (u8 col = 0; col < 24; ++col) vdp_data = 0;
-  }
-}
-
-// ---- Main-CPU web renderer (MC-T5) ---------------------------------------
-//
-// Bypasses the flaky sub-WR-DMA pipeline by drawing the 16-lane web directly
-// into a main-RAM tile-data buffer and DMAing main RAM → VRAM. Plane B paint
-// is unchanged. Main-RAM access is well-understood; DMA from main RAM is
-// the standard MD pattern. If this produces clean diagonals, the bug really
-// is specific to the WR pipeline we used previously.
-
-#define WEB_IMG_W   192
-#define WEB_IMG_H   192
-#define WEB_CELLS_W 24
-#define WEB_CELLS_H 24
-#define WEB_BUF_BYTES (WEB_CELLS_W * WEB_CELLS_H * 32)   /* 18432 bytes */
-
-static u8 g_web_buf[WEB_BUF_BYTES];
-
-/* Scale base-radius-60 shape-table coords → render radius 80 (v * 4/3).
- * Uses inline divs.w to avoid pulling __divsi3 from libgcc. */
-static inline s16 web_scale(s8 v)
-{
-  s32 t = (s32) v * 4;
-  s16 three = 3;
-  asm ("divs.w %1, %0" : "+d"(t) : "d"(three) : "cc");
-  return (s16) t;
-}
-
-/* ---- VDP hardware sprite tile data for enemies (MC-T6) -----------------
- * Three size variants of a filled diamond for "flipper" enemy. Selection
- * driven by depth_fp at render time (smaller at centre, larger at rim).
- *   FAR  =  8x8  ( 1 tile,  32 bytes,  VRAM tile $400)
- *   MID  = 16x16 ( 4 tiles, 128 bytes, VRAM tile $410..$413)
- *   NEAR = 24x24 ( 9 tiles, 288 bytes, VRAM tile $420..$428)
- * Sprite multi-tile layout is column-major: tile 0 = top-left, tile 1 =
- * below it, tile (height) = top of next column. */
-
-/* Web tiles span $280..$4BF (24x24 = 576 tiles). Sprite tile data must
- * live AFTER that range or it'll overwrite web tiles and show up as red
- * splotches on plane B. */
-#define FLIPPER_TILE_FAR   0x4C0        /* 8x8  = 1 tile  */
-#define FLIPPER_TILE_MID   0x4D0        /* 16x16 = 4 tiles */
-#define FLIPPER_TILE_NEAR  0x4E0        /* 24x24 = 9 tiles (unused) */
-
-#define DIAMOND_PAL  2                  /* palette index for enemy sprites */
-
-/* Procedurally generate a filled-diamond sprite of N×N pixels (N must be
- * a multiple of 8) into `out` in VDP tile format, column-major across
- * the sprite's tiles. out must have N*N/2 bytes available. */
-static void make_diamond(u8 N, u8 pal, u8 * out)
-{
-  /* Zero out the buffer first. */
-  u16 total_bytes = (u16) ((u16) N * N / 2);
-  for (u16 i = 0; i < total_bytes; ++i) out[i] = 0;
-
-  u8 tiles_per_col = (u8) (N / 8);
-  u8 center = (u8) (N / 2);
-
-  for (u8 row = 0; row < N; ++row) {
-    /* For a filled diamond: half-width at row R = min(R, N-1-R) + 1.
-     * Pixels lit at columns [center-half, center+half-1]. */
-    u8 d = (row < center) ? row : (u8) (N - 1 - row);
-    u8 half = (u8) (d + 1);
-    s16 lo = (s16) center - half;
-    s16 hi = (s16) center + half - 1;
-    for (s16 col = lo; col <= hi; ++col) {
-      u8 tile_col = (u8) (col / 8);
-      u8 tile_row = (u8) (row / 8);
-      u8 local_col = (u8) (col & 7);
-      u8 local_row = (u8) (row & 7);
-      /* Column-major: tile_index = tile_col * tiles_per_col + tile_row. */
-      u16 tile_idx = (u16) ((u16) tile_col * tiles_per_col + tile_row);
-      u16 byte_off = (u16) (tile_idx * 32 + local_row * 4 + local_col / 2);
-      if (local_col & 1)
-        out[byte_off] |= (pal & 0x0F);
-      else
-        out[byte_off] |= (u8) ((pal & 0x0F) << 4);
-    }
-  }
-}
-
-/* Sprite size encoding: VDP byte 2, bits 3-2 = V size-1, bits 1-0 = H size-1.
- *  1x1: 0x00,  2x2: 0x05,  3x3: 0x0A,  4x4: 0x0F
- * Plus the VRAM tile base and the half-extent for centring on (px, py). */
-typedef struct { u8 size_byte; u16 tile_base; u8 half; } SpriteSizeDef;
-static const SpriteSizeDef FLIPPER_SIZES[2] = {
-  { 0x00, FLIPPER_TILE_FAR, 4 },       /*  8x8 — far / centre */
-  { 0x05, FLIPPER_TILE_MID, 8 },       /* 16x16 — near / rim  */
-};
-
-/* 16-lane rim offsets — one table per web shape. Each lane's (dx, dy) is
- * the offset from the web centre to that lane's rim point, in pixels.
- * Lane 0 points "down" (+Y), going clockwise to lane 15. */
-
-static const s8 WEB_RIM_CIRCLE[16][2] = {
-  {   0,  60 }, {  23,  55 }, {  42,  42 }, {  55,  23 },
-  {  60,   0 }, {  55, -23 }, {  42, -42 }, {  23, -55 },
-  {   0, -60 }, { -23, -55 }, { -42, -42 }, { -55, -23 },
-  { -60,   0 }, { -55,  23 }, { -42,  42 }, { -23,  55 },
-};
-
-static const s8 WEB_RIM_SQUARE[16][2] = {
-  {   0,  60 }, {  25,  60 }, {  60,  60 }, {  60,  25 },
-  {  60,   0 }, {  60, -25 }, {  60, -60 }, {  25, -60 },
-  {   0, -60 }, { -25, -60 }, { -60, -60 }, { -60, -25 },
-  { -60,   0 }, { -60,  25 }, { -60,  60 }, { -25,  60 },
-};
-
-/* PLUS / cross — cardinal arms reach out, diagonals are pulled back. */
-static const s8 WEB_RIM_PLUS[16][2] = {
-  {   0,  60 }, {   8,  25 }, {  15,  15 }, {  25,   8 },
-  {  60,   0 }, {  25,  -8 }, {  15, -15 }, {   8, -25 },
-  {   0, -60 }, {  -8, -25 }, { -15, -15 }, { -25,  -8 },
-  { -60,   0 }, { -25,   8 }, { -15,  15 }, {  -8,  25 },
-};
-
-/* Diamond — like square but rotated 45°. Cardinals are far, diagonals
- * are mid. */
-static const s8 WEB_RIM_DIAMOND[16][2] = {
-  {   0,  60 }, {  15,  45 }, {  30,  30 }, {  45,  15 },
-  {  60,   0 }, {  45, -15 }, {  30, -30 }, {  15, -45 },
-  {   0, -60 }, { -15, -45 }, { -30, -30 }, { -45, -15 },
-  { -60,   0 }, { -45,  15 }, { -30,  30 }, { -15,  45 },
-};
-
-/* Triangle — equilateral, pointing up. Lane 0 = bottom centre, lane 8
- * = top apex, going clockwise. 5 lanes on bottom edge, 4 each on
- * right + left edges (sharing corner lanes). */
-static const s8 WEB_RIM_TRIANGLE[16][2] = {
-  {   0,  30 }, {  13,  30 }, {  26,  30 }, {  39,  30 },
-  {  52,  30 }, {  39,   7 }, {  26, -15 }, {  13, -37 },
-  {   0, -60 }, { -13, -37 }, { -26, -15 }, { -39,   7 },
-  { -52,  30 }, { -39,  30 }, { -26,  30 }, { -13,  30 },
-};
-
-/* Octagon — 8-sided polygon, lane 0/2/4/...=vertices, 1/3/5/...=mid-
- * points between adjacent vertices. */
-static const s8 WEB_RIM_OCTAGON[16][2] = {
-  {   0,  60 }, {  21,  51 }, {  42,  42 }, {  51,  21 },
-  {  60,   0 }, {  51, -21 }, {  42, -42 }, {  21, -51 },
-  {   0, -60 }, { -21, -51 }, { -42, -42 }, { -51, -21 },
-  { -60,   0 }, { -51,  21 }, { -42,  42 }, { -21,  51 },
-};
-
-/* Star — 8-pointed: even lanes at full radius 60, odd lanes pulled in
- * to ~28 between points to create spikes. */
-static const s8 WEB_RIM_STAR[16][2] = {
-  {   0,  60 }, {  11,  28 }, {  42,  42 }, {  28,  11 },
-  {  60,   0 }, {  28, -11 }, {  42, -42 }, {  11, -28 },
-  {   0, -60 }, { -11, -28 }, { -42, -42 }, { -28, -11 },
-  { -60,   0 }, { -28,  11 }, { -42,  42 }, { -11,  28 },
-};
-
-/* Fan / Line — all 16 rim points along a horizontal line at +40,
- * spread evenly from x=-60 to x=+60. Apex of fan at the centre, base
- * at bottom. Player walks the bottom edge. */
-static const s8 WEB_RIM_FAN[16][2] = {
-  { -60,  40 }, { -52,  40 }, { -44,  40 }, { -36,  40 },
-  { -28,  40 }, { -20,  40 }, { -12,  40 }, {  -4,  40 },
-  {   4,  40 }, {  12,  40 }, {  20,  40 }, {  28,  40 },
-  {  36,  40 }, {  44,  40 }, {  52,  40 }, {  60,  40 },
-};
-
-typedef enum {
-  WEB_SHAPE_CIRCLE = 0,
-  WEB_SHAPE_SQUARE,
-  WEB_SHAPE_PLUS,
-  WEB_SHAPE_DIAMOND,
-  WEB_SHAPE_TRIANGLE,
-  WEB_SHAPE_OCTAGON,
-  WEB_SHAPE_STAR,
-  WEB_SHAPE_FAN,
-  WEB_SHAPE_COUNT,
-} WebShape;
-
-static const char * const WEB_SHAPE_NAMES[WEB_SHAPE_COUNT] = {
-  "CIRCLE  ", "SQUARE  ", "PLUS    ", "DIAMOND ",
-  "TRIANGLE", "OCTAGON ", "STAR    ", "FAN     ",
-};
-
-const s8 (* const WEB_RIMS[WEB_SHAPE_COUNT])[2] = {
-  WEB_RIM_CIRCLE,
-  WEB_RIM_SQUARE,
-  WEB_RIM_PLUS,
-  WEB_RIM_DIAMOND,
-  WEB_RIM_TRIANGLE,
-  WEB_RIM_OCTAGON,
-  WEB_RIM_STAR,
-  WEB_RIM_FAN,
-};
-
-u8 g_web_shape = WEB_SHAPE_CIRCLE;
-
-static void web_setpx(s16 x, s16 y, u8 pal)
-{
-  if ((u16) x >= WEB_IMG_W || (u16) y >= WEB_IMG_H) return;
-  u16 cell_off = (u16) ((y >> 3) * WEB_CELLS_W + (x >> 3)) * 32;
-  u16 byte_off = (u16) ((y & 7) * 4 + ((x & 7) >> 1));
-  u8 * dst = g_web_buf + cell_off + byte_off;
-  if (x & 1)
-    *dst = (u8) ((*dst & 0xF0) | (pal & 0x0F));
-  else
-    *dst = (u8) ((*dst & 0x0F) | ((pal & 0x0F) << 4));
-}
-
-static void web_line(s16 x0, s16 y0, s16 x1, s16 y1, u8 pal)
-{
-  s16 dx =  (s16) ((x1 > x0) ? (x1 - x0) : (x0 - x1));
-  s16 dy = -(s16) ((y1 > y0) ? (y1 - y0) : (y0 - y1));
-  s16 sx = (x0 < x1) ? 1 : -1;
-  s16 sy = (y0 < y1) ? 1 : -1;
-  s16 err = dx + dy;
-  while (1) {
-    /* Single-pixel line — vector-graphics Tempest feel. */
-    web_setpx(x0, y0, pal);
-    if (x0 == x1 && y0 == y1) break;
-    s16 e2 = (s16) (err << 1);
-    if (e2 >= dy) { err += dy; x0 = (s16) (x0 + sx); }
-    if (e2 <= dx) { err += dx; y0 = (s16) (y0 + sy); }
-  }
-}
-
-static void web_render_main(u8 pal)
-{
-  const s8 (*rim)[2] = WEB_RIMS[g_web_shape];
-  for (u16 i = 0; i < WEB_BUF_BYTES; ++i) g_web_buf[i] = 0;
-  s16 const cx = WEB_IMG_W / 2;            /* 96 for 192-px buffer */
-  s16 const cy = WEB_IMG_H / 2;
-
-  /* 1. Radial lines from centre to each lane's scaled rim point. */
-  for (u8 lane = 0; lane < 16; ++lane) {
-    s16 rx = (s16) (cx + web_scale(rim[lane][0]));
-    s16 ry = (s16) (cy + web_scale(rim[lane][1]));
-    web_line(cx, cy, rx, ry, pal);
-  }
-
-  /* 2. Rim polygon — connect adjacent rim points so the web's outline
-   * is visible (square edges, diamond edges, etc.). */
-  for (u8 lane = 0; lane < 16; ++lane) {
-    u8 next = (u8) ((lane + 1) & 0x0F);
-    s16 ax = (s16) (cx + web_scale(rim[lane][0]));
-    s16 ay = (s16) (cy + web_scale(rim[lane][1]));
-    s16 bx = (s16) (cx + web_scale(rim[next][0]));
-    s16 by = (s16) (cy + web_scale(rim[next][1]));
-    web_line(ax, ay, bx, by, pal);
-  }
-}
-
-static void web_dma_main_to_vram(void)
-{
-  u16 const mode2_dma_on  = VDP_REG_MODE2 | VDP_MD_DISPLAY_MODE | VDP_VBLANK_ENABLE
-                          | VIDEO_SIGNAL | VDP_DISPLAY_ENABLE | VDP_DMA_ENABLE;
-  u16 const mode2_dma_off = mode2_dma_on & ~VDP_DMA_ENABLE;
-  vdp_ctrl = VDP_REG_AUTOINC | 2;
-  vdp_ctrl = mode2_dma_on;
-  vdp_dma_transfer((char *) g_web_buf,
-                   to_vdp_addr(ROT_TILE_VRAM_ADDR) | VRAM_W,
-                   (u16) (WEB_BUF_BYTES / 2));
-  vdp_ctrl = mode2_dma_off;
-}
-
-/* Generate and DMA all 3 flipper sprite size variants to VRAM. */
-static u8 g_sprite_gen_buf[24 * 24 / 2];     /* big enough for largest */
-
-static void load_enemy_sprites_to_vram(void)
-{
-  u16 const mode2_dma_on  = VDP_REG_MODE2 | VDP_MD_DISPLAY_MODE | VDP_VBLANK_ENABLE
-                          | VIDEO_SIGNAL | VDP_DISPLAY_ENABLE | VDP_DMA_ENABLE;
-  u16 const mode2_dma_off = mode2_dma_on & ~VDP_DMA_ENABLE;
-  vdp_ctrl = VDP_REG_AUTOINC | 2;
-
-  /* 8x8 → tile FLIPPER_TILE_FAR (32 bytes = 16 words) */
-  make_diamond(8, DIAMOND_PAL, g_sprite_gen_buf);
-  vdp_ctrl = mode2_dma_on;
-  vdp_dma_transfer((char const *) g_sprite_gen_buf,
-                   to_vdp_addr(FLIPPER_TILE_FAR * 32) | VRAM_W,
-                   16);
-  vdp_ctrl = mode2_dma_off;
-
-  /* 16x16 → FLIPPER_TILE_MID (128 bytes = 64 words) */
-  make_diamond(16, DIAMOND_PAL, g_sprite_gen_buf);
-  vdp_ctrl = mode2_dma_on;
-  vdp_dma_transfer((char const *) g_sprite_gen_buf,
-                   to_vdp_addr(FLIPPER_TILE_MID * 32) | VRAM_W,
-                   64);
-  vdp_ctrl = mode2_dma_off;
-
-  /* (24x24 size variant removed — felt oversized vs the 120-px web.) */
-}
-
-/* Walk active entity list and write the VDP sprite attribute table.
- * One sprite per FLIPPER. Other entity types still use plane-A text
- * glyphs. Sprite 0 is always present; hide it off-screen if no flippers. */
-#define SPR_TABLE_VRAM 0xb800
-#define SPR_MAX 32
-
-static void render_enemy_sprites(void)
-{
-  /* Build the sprite table in a local buffer, then DMA-or-write to VRAM.
-   * 4 words per sprite × SPR_MAX = 128 words. */
-  static u16 spr_buf[SPR_MAX * 4];
-  u8 n = 0;
-  for (Entity * e = g_active_head; e; e = e->next) {
-    if (e->type != E_FLIPPER) continue;
-    if (n >= SPR_MAX) break;
-    s16 px = web_pixel_x(e->lane, e->depth_fp);
-    s16 py = web_pixel_y(e->lane, e->depth_fp);
-    /* Pick size based on depth_fp: small near centre, large near rim.
-     * Threshold at FP_ONE/2 splits the two size bands. */
-    u8 size_idx = (e->depth_fp < 0x8000) ? 0 : 1;
-    const SpriteSizeDef * sz = &FLIPPER_SIZES[size_idx];
-    spr_buf[n * 4 + 0] = (u16) (py + 128 - sz->half);            /* Y */
-    spr_buf[n * 4 + 1] = (u16) (((u16) sz->size_byte << 8) | (n + 1));
-    spr_buf[n * 4 + 2] = sz->tile_base;
-    spr_buf[n * 4 + 3] = (u16) (px + 128 - sz->half);            /* X */
-    n++;
-  }
-  if (n == 0) {
-    /* Sprite 0 hidden off-screen, chain ends immediately. */
-    spr_buf[0] = 0;
-    spr_buf[1] = 0;
-    spr_buf[2] = 0;
-    spr_buf[3] = 0;
-    n = 1;
-  } else {
-    /* Terminate chain at last used sprite. */
-    spr_buf[(n - 1) * 4 + 1] &= 0xFF00;
-  }
-  /* Write sprite table via VDP data port. */
-  vdp_ctrl_32 = to_vdp_addr(SPR_TABLE_VRAM) | VRAM_W;
-  u16 const words = (u16) (n * 4);
-  for (u16 i = 0; i < words; ++i) vdp_data = spr_buf[i];
-}
-
 // ---- Scene: TITLE ---------------------------------------------------------
 
 static void title_always_vblank(void) { return; }
 static void title_gated_vblank (void) { return; }
-static void title_main_thread  (void);
 
 static void install_title(void)
 {
@@ -778,7 +154,7 @@ static void install_title(void)
     mcd_wait_ack(CMD_STOP_MOD);
     g_music_playing = 0;
   }
-  rot_clear_plane_b();         // wipe gameplay/xform ASIC bg before TITLE
+  web_clear_plane_b();
 }
 
 // ---- Scene: PLAYFIELD (web + player) -------------------------------------
@@ -841,12 +217,8 @@ static void kill_flipper(Entity * e)
   entity_kill(e);
 }
 
-/* draw_web_once (text-dot web) retired in MC-T4b — web now renders as
- * smooth pixel lines on plane B via web_render_main(). */
-
 static void play_always_vblank(void) { return; }
 static void play_gated_vblank (void);
-static void play_main_thread  (void);
 
 static void install_playfield(void)
 {
@@ -877,14 +249,11 @@ static void install_playfield(void)
     mcd_wait_ack(CMD_PLAY_MOD);
     g_music_playing = 1;
 
-    // Main-CPU rendered web on plane B — bypasses the WR-DMA pipeline.
-    web_render_main(4);              /* yellow web with current palette */
+    web_render_main(4);              /* yellow web */
     web_dma_main_to_vram();
-    rot_paint_plane_b();
+    web_paint_plane_b();
   }
 
-  /* Upload enemy sprite tile data on every PLAYFIELD install (also
-   * cheap; survives across scene swaps but harmless to redo). */
   load_enemy_sprites_to_vram();
 
   g_player = entity_spawn();
@@ -933,7 +302,7 @@ static void play_gated_vblank(void)
   // Spawn a flipper every spawn_period frames, capped.
   if (g_spawn_timer) g_spawn_timer--;
   if (g_spawn_timer == 0 && g_flipper_count < FLIPPER_MAX_ACTIVE) {
-    spawn_flipper((u8) (lcg() & 0x0F));        // 0..15
+    spawn_flipper((u8) (lcg() & 0x0F));
     g_spawn_timer = FLIPPER_SPAWN_PERIOD;
   }
 
@@ -954,7 +323,6 @@ static void play_gated_vblank(void)
           e->lifetime     = e->step_period;
         }
       } else {
-        // Rim-walking: hop one lane toward the player every step_period.
         if (e->lifetime) e->lifetime--;
         if (e->lifetime == 0) {
           if      (e->lane < g_player_lane) e->lane++;
@@ -1006,7 +374,7 @@ static void play_gated_vblank(void)
   }
 }
 
-// ---- Scene bodies ---------------------------------------------------------
+// ---- Scene main_thread bodies ---------------------------------------------
 
 static void title_main_thread(void)
 {
@@ -1021,7 +389,6 @@ static void title_main_thread(void)
     print("WEB:",               plane_xy(2, 20));
     g_scene_dirty = 0;
   }
-  /* Show current shape name (dynamic so we can update on C-cycle). */
   print(WEB_SHAPE_NAMES[g_web_shape], plane_xy(7, 20));
 
   if (p1_single & PAD_START) install_playfield();
@@ -1038,8 +405,6 @@ static void play_main_thread(void)
     print("B = TITLE",          plane_xy(2, 27));
     print("LANE:",              plane_xy(28, 3));
     print("SCORE:",             plane_xy(28, 27));
-    /* Web now rendered as crisp pixel lines on plane B by the Sub CPU;
-     * text-dot web on plane A is retired. */
     g_scene_dirty = 0;
   }
 
@@ -1052,13 +417,11 @@ static void play_main_thread(void)
     plane_putc(32, 27, (char) ('0' + (s % 10)));
   }
 
-  // Render every live entity. Flippers now use VDP hardware sprites
-  // (see render_enemy_sprites). Player + shot still draw as plane A
-  // text glyphs.
+  // Render every live entity. Flippers use VDP hardware sprites (see
+  // render_enemy_sprites). Player + shot still draw as plane A text glyphs.
   for (Entity * e = g_active_head; e; e = e->next) {
     if (e->type == E_FLIPPER) {
-      /* Clear prev cell if flipper used to be drawn on plane A
-       * (legacy state), then nothing more — sprite handles display. */
+      /* Clear prev cell if flipper used to be drawn on plane A. */
       if (e->prev_cx >= 0) {
         plane_putc((u16) e->prev_cx, (u16) e->prev_cy, ' ');
         e->prev_cx = -1;
@@ -1076,7 +439,6 @@ static void play_main_thread(void)
     e->prev_cy = cy;
   }
 
-  /* Write VDP sprite table for flippers. */
   render_enemy_sprites();
 
   // Lane index display, two digits.
@@ -1085,6 +447,8 @@ static void play_main_thread(void)
 
   if (p1_single & PAD_B) install_title();
 }
+
+// ---- main -----------------------------------------------------------------
 
 void main(void)
 {
@@ -1101,9 +465,7 @@ void main(void)
   clear_vram();
   clear_vsram();
 
-  /* Palette: black bg, white text/UI, red enemies, yellow web.
-   * Explicit zero-init the whole 64-entry array first so unset slots
-   * don't take garbage values from un-init'd .bss. */
+  /* Palette: black bg, white text/UI, red enemies, yellow web. */
   for (u8 i = 0; i < 64; ++i) cram[i] = 0;
   cram[0]  = 0x0000;          // 0 transparent / black
   cram[1]  = 0x0EEE;          // 1 white   — text, UI, player
@@ -1138,9 +500,6 @@ void main(void)
     vblank_done = false;
     g_engine.frame++;
 
-    // Doc 16: always_vblank fires every frame; gated_vblank only when
-    // not paused; main_thread runs immediately after to complete the
-    // frame's work.
     if (g_engine.always_vblank) g_engine.always_vblank();
     if (!g_engine.paused && g_engine.gated_vblank) g_engine.gated_vblank();
     if (g_engine.main_thread)   g_engine.main_thread();
@@ -1155,7 +514,6 @@ void main(void)
     digits[0] = '0' + (f % 10);
     print(digits, plane_xy(9, 25));
 
-    // Scene-name indicator — proves the handler swap actually happened.
     char const * scene_name = "?    ";
     if      (g_engine.main_thread == title_main_thread) scene_name = "TITLE";
     else if (g_engine.main_thread == play_main_thread)  scene_name = "PLAY ";

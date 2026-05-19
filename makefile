@@ -10,7 +10,11 @@ BUILD_PATH:=build
 
 CC_FLAGS?=-O1 -fconserve-stack -fomit-frame-pointer -fno-gcse
 AS_FLAGS?=
-LD_FLAGS?=
+# megadev declares vdp_dma_transfer as a non-static function body in its
+# header — including <main/vdp.h> from multiple TUs is an ODR violation
+# the linker rejects without -z muldefs. The module builds in the same
+# megadev makefile use this flag for the same reason.
+LD_FLAGS?=-z muldefs
 
 MEGADEV_PATH?=/opt/megadev
 include $(MEGADEV_PATH)/megadev.make
@@ -29,5 +33,8 @@ clean:
 $(PROJECT_ID).cart: \
 	init.s \
 	main.c \
+	entity.c \
+	mcd.c \
+	web.c \
 	mulsi3.s \
 	res.s
