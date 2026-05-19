@@ -449,7 +449,8 @@ void main(void)
   cram[0]  = 0x0000;          // 0 transparent / black
   cram[1]  = 0x0EEE;          // 1 white   — text, UI, player
   cram[2]  = 0x000E;          // 2 red     — enemy sprites
-  cram[4]  = 0x00EE;          // 4 yellow  — web lines
+  cram[4]  = 0x00EE;          // 4 yellow  — web outline lines
+  cram[5]  = 0x0402;          // 5 deep purple-blue — web lane FILL
   cram[15] = 0x0AAA;          // 15 gray   — dim accent
   update_cram();
 

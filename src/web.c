@@ -53,14 +53,19 @@
 #define SPR_MAX 32
 
 static u8 g_web_buf[WEB_BUF_BYTES];
-static s16 g_lane_rim_x[NUM_LANES];
-static s16 g_lane_rim_y[NUM_LANES];
 
-/* Inner-rim (vanishing) points — at 1/4 the rim distance from centre, so
- * the web has a "tunnel" 3D feel rather than all lines converging at a
- * single point. Filled alongside rim points in web_init. */
-static s16 g_lane_inner_x[NUM_LANES];
-static s16 g_lane_inner_y[NUM_LANES];
+/* Lane MIDPOINT positions — entities (player, shots, flippers) live in
+ * the gaps BETWEEN adjacent radial lines, not on the lines themselves,
+ * matching Jaguar T2K's lane geometry. g_lane_mid_outer[k] is the
+ * midpoint of line endpoints k and k+1 on the outer rim; g_lane_mid_inner
+ * is the equivalent on the (offset, smaller) inner rim. */
+static s16 g_lane_mid_outer_x[NUM_LANES];
+static s16 g_lane_mid_outer_y[NUM_LANES];
+static s16 g_lane_mid_inner_x[NUM_LANES];
+static s16 g_lane_mid_inner_y[NUM_LANES];
+
+/* web_render_main still draws lines between line endpoints (recomputed on
+ * the fly from the rim[] table) — those are NOT lane midpoints. */
 
 /* Which of the 16 pre-rotated claws best faces inward from each lane's
  * rim point. Filled by web_init() per shape — radial shapes (CIRCLE,
@@ -191,24 +196,35 @@ u8 g_web_shape = WEB_SHAPE_CIRCLE;
 void web_init(void)
 {
   const s8 (*rim)[2] = WEB_RIMS[g_web_shape];
+
+  /* Compute the 16 line endpoints first (locally — only the lane
+   * midpoints derived from them are stored globally). */
+  s16 line_outer_x[NUM_LANES], line_outer_y[NUM_LANES];
+  s16 line_inner_x[NUM_LANES], line_inner_y[NUM_LANES];
   for (u8 i = 0; i < NUM_LANES; ++i) {
     s16 sx = web_scale(rim[i][0]);
     s16 sy = web_scale(rim[i][1]);
-    g_lane_rim_x[i]   = (s16) (WEB_CENTER_X + sx);
-    g_lane_rim_y[i]   = (s16) (WEB_CENTER_Y + sy);
-    /* Inner point at 1/4 the rim distance (signed shift right by 2) — gives
-     * the "tunnel" 3D shape from each lane's rim down toward a small inner
-     * copy of the same outline. */
-    g_lane_inner_x[i] = (s16) (WEB_CENTER_X + (sx >> 3));
-    g_lane_inner_y[i] = (s16) (WEB_CENTER_Y + WEB_VANISH_OFFSET_Y + (sy >> 3));
+    line_outer_x[i] = (s16) (WEB_CENTER_X + sx);
+    line_outer_y[i] = (s16) (WEB_CENTER_Y + sy);
+    line_inner_x[i] = (s16) (WEB_CENTER_X + (sx >> 3));
+    line_inner_y[i] = (s16) (WEB_CENTER_Y + WEB_VANISH_OFFSET_Y + (sy >> 3));
   }
 
-  /* Pick the claw rotation that best points from each rim toward the centre.
-   * dot-product against all 16 directions, take the max. (Values stay well
-   * within s32 — rim deltas ≤ 80, dir components ≤ 64, sum ≤ ~10240.) */
+  /* Lane midpoints = average of adjacent line endpoints. Lane k sits
+   * BETWEEN line k and line k+1 (mod 16) — same convention as T2K. */
   for (u8 i = 0; i < NUM_LANES; ++i) {
-    s16 tx = (s16) (WEB_CENTER_X - g_lane_rim_x[i]);
-    s16 ty = (s16) (WEB_CENTER_Y - g_lane_rim_y[i]);
+    u8 j = (u8) ((i + 1) & 0x0F);
+    g_lane_mid_outer_x[i] = (s16) ((line_outer_x[i] + line_outer_x[j]) >> 1);
+    g_lane_mid_outer_y[i] = (s16) ((line_outer_y[i] + line_outer_y[j]) >> 1);
+    g_lane_mid_inner_x[i] = (s16) ((line_inner_x[i] + line_inner_x[j]) >> 1);
+    g_lane_mid_inner_y[i] = (s16) ((line_inner_y[i] + line_inner_y[j]) >> 1);
+  }
+
+  /* Pick the claw rotation that best points from each lane midpoint
+   * toward the web's centre via dot-product over 16 directions. */
+  for (u8 i = 0; i < NUM_LANES; ++i) {
+    s16 tx = (s16) (WEB_CENTER_X - g_lane_mid_outer_x[i]);
+    s16 ty = (s16) (WEB_CENTER_Y - g_lane_mid_outer_y[i]);
     u8 best = 0;
     s32 best_dot = -0x7FFFFFFFL;
     for (u8 k = 0; k < 16; ++k) {
@@ -288,18 +304,19 @@ static void web_player_render_pos(fp16 depth_fp, s16 * out_x, s16 * out_y)
   *out_y = (s16) (fy + (s16) (((ty - fy) * p) >> 2));
 }
 
-/* Interpolate between the inner-rim point (depth=0) and the outer-rim
- * point (depth=FP_ONE). Shots disappear at the inner rim now, not at the
- * web's geometric centre. Flippers spawn at the inner rim and travel out. */
+/* Interpolate between the lane's inner midpoint (depth=0) and its outer
+ * midpoint (depth=FP_ONE). Entities live BETWEEN adjacent radial lines,
+ * matching T2K's lane geometry — the lines are visual boundaries, not
+ * paths. */
 s16 web_pixel_x(u8 lane, fp16 depth_fp)
 {
-  s32 dx = (s32) g_lane_rim_x[lane] - g_lane_inner_x[lane];
-  return (s16) (g_lane_inner_x[lane] + ((dx * depth_fp) >> 16));
+  s32 dx = (s32) g_lane_mid_outer_x[lane] - g_lane_mid_inner_x[lane];
+  return (s16) (g_lane_mid_inner_x[lane] + ((dx * depth_fp) >> 16));
 }
 s16 web_pixel_y(u8 lane, fp16 depth_fp)
 {
-  s32 dy = (s32) g_lane_rim_y[lane] - g_lane_inner_y[lane];
-  return (s16) (g_lane_inner_y[lane] + ((dy * depth_fp) >> 16));
+  s32 dy = (s32) g_lane_mid_outer_y[lane] - g_lane_mid_inner_y[lane];
+  return (s16) (g_lane_mid_inner_y[lane] + ((dy * depth_fp) >> 16));
 }
 
 // ---- Web rasterisation (main-RAM buffer) ----------------------------------
@@ -332,6 +349,65 @@ static void web_line(s16 x0, s16 y0, s16 x1, s16 y1, u8 pal)
   }
 }
 
+/* 32/16 → 16 signed divide via 68000 divs.w — keeps us off __divsi3. */
+static inline s16 div_s32_s16(s32 num, s16 den)
+{
+  s32 t = num;
+  asm ("divs.w %1, %0" : "+d"(t) : "d"(den) : "cc");
+  return (s16) t;
+}
+
+/* Compute x where a line from (px0,py0) to (px1,py1) crosses horizontal
+ * row y. Returns false if y is outside [min(py0,py1), max(py0,py1)). */
+static u8 edge_x_at_y(s16 px0, s16 py0, s16 px1, s16 py1, s16 y, s16 * out_x)
+{
+  s16 ymin = py0 < py1 ? py0 : py1;
+  s16 ymax = py0 < py1 ? py1 : py0;
+  if (y < ymin || y >= ymax) return 0;
+  s32 num = (s32) (px1 - px0) * (s32) (y - py0);
+  s16 dy = (s16) (py1 - py0);
+  *out_x = (s16) (px0 + div_s32_s16(num, dy));
+  return 1;
+}
+
+/* Scanline-fill a convex quadrilateral with the given palette index.
+ * Vertices listed in order (CW or CCW), all 4 edges considered per row.
+ * Used to paint each lane segment between adjacent radial lines. */
+static void web_fill_quad(s16 x0, s16 y0, s16 x1, s16 y1,
+                          s16 x2, s16 y2, s16 x3, s16 y3, u8 pal)
+{
+  s16 ymin = y0;
+  if (y1 < ymin) ymin = y1;
+  if (y2 < ymin) ymin = y2;
+  if (y3 < ymin) ymin = y3;
+  s16 ymax = y0;
+  if (y1 > ymax) ymax = y1;
+  if (y2 > ymax) ymax = y2;
+  if (y3 > ymax) ymax = y3;
+  if (ymin < 0) ymin = 0;
+  if (ymax >= WEB_IMG_H) ymax = WEB_IMG_H - 1;
+
+  for (s16 y = ymin; y <= ymax; ++y) {
+    s16 xs[4];
+    u8 n = 0;
+    if (edge_x_at_y(x0, y0, x1, y1, y, &xs[n])) n++;
+    if (edge_x_at_y(x1, y1, x2, y2, y, &xs[n])) n++;
+    if (edge_x_at_y(x2, y2, x3, y3, y, &xs[n])) n++;
+    if (edge_x_at_y(x3, y3, x0, y0, y, &xs[n])) n++;
+    if (n < 2) continue;
+    s16 lx = xs[0], rx = xs[0];
+    for (u8 i = 1; i < n; ++i) {
+      if (xs[i] < lx) lx = xs[i];
+      if (xs[i] > rx) rx = xs[i];
+    }
+    if (lx < 0) lx = 0;
+    if (rx >= WEB_IMG_W) rx = WEB_IMG_W - 1;
+    for (s16 x = lx; x <= rx; ++x) web_setpx(x, y, pal);
+  }
+}
+
+#define WEB_FILL_PAL  5     /* dark blue/purple, matches T2K's filled web look */
+
 void web_render_main(u8 pal)
 {
   const s8 (*rim)[2] = WEB_RIMS[g_web_shape];
@@ -339,37 +415,44 @@ void web_render_main(u8 pal)
   s16 const cx = WEB_IMG_W / 2;
   s16 const cy = WEB_IMG_H / 2;
 
-  /* 1. Radial lines from INNER rim (offset upward for perspective) to
-   * OUTER rim. The inner is at 1/8 the scaled rim distance, with the
-   * whole inner shape lifted by WEB_VANISH_OFFSET_Y so the web reads as
-   * a tilted tube rather than concentric rings. */
-  for (u8 lane = 0; lane < 16; ++lane) {
-    s16 ox = web_scale(rim[lane][0]);
-    s16 oy = web_scale(rim[lane][1]);
-    s16 ix = ox >> 3;
-    s16 iy = (s16) ((oy >> 3) + WEB_VANISH_OFFSET_Y);
-    web_line((s16) (cx + ix), (s16) (cy + iy),
-             (s16) (cx + ox), (s16) (cy + oy), pal);
+  /* Precompute line-endpoint positions for all 16 boundary lines, both
+   * the inner (vanishing-end) and outer (rim) corners. The inner end is
+   * at 1/8 scale and lifted by WEB_VANISH_OFFSET_Y for the perspective. */
+  s16 ox[16], oy[16], ix[16], iy[16];
+  for (u8 k = 0; k < 16; ++k) {
+    s16 sx = web_scale(rim[k][0]);
+    s16 sy = web_scale(rim[k][1]);
+    ox[k] = (s16) (cx + sx);
+    oy[k] = (s16) (cy + sy);
+    ix[k] = (s16) (cx + (sx >> 3));
+    iy[k] = (s16) (cy + (sy >> 3) + WEB_VANISH_OFFSET_Y);
   }
 
-  /* 2. Outer rim polygon — connect adjacent outer points. */
-  for (u8 lane = 0; lane < 16; ++lane) {
-    u8 next = (u8) ((lane + 1) & 0x0F);
-    s16 ax = (s16) (cx + web_scale(rim[lane][0]));
-    s16 ay = (s16) (cy + web_scale(rim[lane][1]));
-    s16 bx = (s16) (cx + web_scale(rim[next][0]));
-    s16 by = (s16) (cy + web_scale(rim[next][1]));
-    web_line(ax, ay, bx, by, pal);
+  /* 1. FILL each lane (between line k and line k+1) with WEB_FILL_PAL —
+   * gives the web a solid body, T2K-style. Vertices in CCW order around
+   * the trapezoid: inner-k → outer-k → outer-k+1 → inner-k+1. */
+  for (u8 k = 0; k < 16; ++k) {
+    u8 j = (u8) ((k + 1) & 0x0F);
+    web_fill_quad(ix[k], iy[k],
+                  ox[k], oy[k],
+                  ox[j], oy[j],
+                  ix[j], iy[j], WEB_FILL_PAL);
   }
 
-  /* 3. Inner rim polygon — same shape at 1/4 scale. */
-  for (u8 lane = 0; lane < 16; ++lane) {
-    u8 next = (u8) ((lane + 1) & 0x0F);
-    s16 ax = (s16) (cx + (web_scale(rim[lane][0]) >> 3));
-    s16 ay = (s16) (cy + (web_scale(rim[lane][1]) >> 3) + WEB_VANISH_OFFSET_Y);
-    s16 bx = (s16) (cx + (web_scale(rim[next][0]) >> 3));
-    s16 by = (s16) (cy + (web_scale(rim[next][1]) >> 3) + WEB_VANISH_OFFSET_Y);
-    web_line(ax, ay, bx, by, pal);
+  /* 2. Radial lines from inner to outer, drawn on top of the fill. */
+  for (u8 k = 0; k < 16; ++k)
+    web_line(ix[k], iy[k], ox[k], oy[k], pal);
+
+  /* 3. Outer rim polygon. */
+  for (u8 k = 0; k < 16; ++k) {
+    u8 j = (u8) ((k + 1) & 0x0F);
+    web_line(ox[k], oy[k], ox[j], oy[j], pal);
+  }
+
+  /* 4. Inner rim polygon. */
+  for (u8 k = 0; k < 16; ++k) {
+    u8 j = (u8) ((k + 1) & 0x0F);
+    web_line(ix[k], iy[k], ix[j], iy[j], pal);
   }
 }
 
