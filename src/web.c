@@ -9,31 +9,36 @@
 #define VIDEO_SIGNAL 0
 #endif
 
-/* ---- VRAM layout (post-MC-T6c) -------------------------------------------
- *   Web tile data: $280..$4BF  (24x24 = 576 tiles, VRAM $5000..$97FF)
- *   Sprite tiles:  $4C0 (8x8), $4D0..$4D3 (16x16)  — MUST stay above $4BF
- *   Plane B tilemap: $4000..$4FFF (web paints cells 8..31, 2..25)
+/* ---- VRAM layout (post-MC-T10) -------------------------------------------
+ *   Web tile data: $280..$523  (26x26 = 676 tiles, VRAM $5000..$A47F)
+ *   Plane B tilemap: $4000..$4FFF (web paints cells 7..32, 1..26)
+ *   Sprite tiles must live above the web range and below the sprite
+ *   attribute table at VRAM $B800 (= tile $5C0):
+ *     $540        flipper FAR (8x8)
+ *     $550..$553  flipper MID (16x16)
+ *     $560..$59F  player claws — 16 rotations × 4 tiles
+ *     $5A0        shot (8x8)
  *   Sprite attribute table: $B800
  */
 #define ROT_TILE_BASE_IDX  0x280
 #define ROT_TILE_VRAM_ADDR (ROT_TILE_BASE_IDX * 32)
-#define PLANE_B_PAINT_COL  8
-#define PLANE_B_PAINT_ROW  2
+#define PLANE_B_PAINT_COL  7
+#define PLANE_B_PAINT_ROW  1
 
-#define WEB_IMG_W   192
-#define WEB_IMG_H   192
-#define WEB_CELLS_W 24
-#define WEB_CELLS_H 24
-#define WEB_BUF_BYTES (WEB_CELLS_W * WEB_CELLS_H * 32)   /* 18432 bytes */
+#define WEB_IMG_W   208
+#define WEB_IMG_H   208
+#define WEB_CELLS_W 26
+#define WEB_CELLS_H 26
+#define WEB_BUF_BYTES (WEB_CELLS_W * WEB_CELLS_H * 32)   /* 21632 bytes */
 
 /* Sprite-tile VRAM slots (data from src/sprites.{c,h}, baked by
  * tools/extract_mcd_sprites.py from tempest2k-source/src/obj2d.s).
  * Player is 16 pre-rotated claws (one per lane) packed contiguously so we
  * can pick by `PLAYER_TILE_BASE + lane * 4`. */
-#define FLIPPER_TILE_FAR    0x4C0       /* 8x8  = 1 tile,  red flipper */
-#define FLIPPER_TILE_MID    0x4D0       /* 16x16 = 4 tiles, red flipper */
-#define PLAYER_TILE_BASE    0x4E0       /* 16 × 4 tiles = 64 tiles, $4E0..$51F */
-#define SHOT_TILE           0x520       /* 8x8 = 1 tile, white shot */
+#define FLIPPER_TILE_FAR    0x540       /* 8x8  = 1 tile,  red flipper */
+#define FLIPPER_TILE_MID    0x550       /* 16x16 = 4 tiles, red flipper */
+#define PLAYER_TILE_BASE    0x560       /* 16 × 4 tiles = 64 tiles, $560..$59F */
+#define SHOT_TILE           0x5A0       /* 8x8 = 1 tile, white shot */
 
 #define PLAYER_TILES_PER_LANE 4         /* 2x2 = 4 tiles per claw rotation */
 
@@ -62,11 +67,11 @@ static const s8 CLAW_DIR_Y[16] = {
    64,  59,  45,  25,   0, -25, -45, -59,
 };
 
-/* Scale base-radius-60 shape-table coords → render radius 80 (v * 4/3).
+/* Scale base-radius-60 shape-table coords → render radius 100 (v * 5/3).
  * Uses inline divs.w to avoid pulling __divsi3 from libgcc. */
 static inline s16 web_scale(s8 v)
 {
-  s32 t = (s32) v * 4;
+  s32 t = (s32) v * 5;
   s16 three = 3;
   asm ("divs.w %1, %0" : "+d"(t) : "d"(three) : "cc");
   return (s16) t;

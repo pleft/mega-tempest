@@ -398,28 +398,19 @@ static void play_main_thread(void)
 {
   if (g_scene_dirty) {
     clear_play_area();
-    print("L/R=WALK  A=FIRE",   plane_xy(2,  3));
-    print("B = TITLE",          plane_xy(2, 27));
-    print("LANE:",              plane_xy(28, 3));
-    print("SCORE:",             plane_xy(28, 27));
+    print("SCORE:", plane_xy(28, 27));
     g_scene_dirty = 0;
   }
 
   // Score readout — 4 digits, no 32-bit divide needed.
-  {
-    u16 s = g_score;
-    plane_putc(35, 27, (char) ('0' + (s % 10))); s /= 10;
-    plane_putc(34, 27, (char) ('0' + (s % 10))); s /= 10;
-    plane_putc(33, 27, (char) ('0' + (s % 10))); s /= 10;
-    plane_putc(32, 27, (char) ('0' + (s % 10)));
-  }
+  u16 s = g_score;
+  plane_putc(37, 27, (char) ('0' + (s % 10))); s /= 10;
+  plane_putc(36, 27, (char) ('0' + (s % 10))); s /= 10;
+  plane_putc(35, 27, (char) ('0' + (s % 10))); s /= 10;
+  plane_putc(34, 27, (char) ('0' + (s % 10)));
 
   /* All entities (player, shots, flippers) render via VDP hardware sprites. */
   render_sprites();
-
-  // Lane index display, two digits.
-  plane_putc(34, 3, (char) ('0' + (g_player_lane / 10)));
-  plane_putc(35, 3, (char) ('0' + (g_player_lane % 10)));
 
   if (p1_single & PAD_B) install_title();
 }
@@ -462,10 +453,6 @@ void main(void)
   if (g_mcd_present) mcd_init();
   g_music_playing = 0;
 
-  // Persistent UI chrome at the bottom; scenes paint above it.
-  print("FRAME:",               plane_xy(2,  25));
-  print("SCENE:",               plane_xy(20, 25));
-
   install_title();
 
   vdp_ctrl = vdp_regs[1];        // display on
@@ -479,20 +466,5 @@ void main(void)
     if (g_engine.always_vblank) g_engine.always_vblank();
     if (!g_engine.paused && g_engine.gated_vblank) g_engine.gated_vblank();
     if (g_engine.main_thread)   g_engine.main_thread();
-
-    // Frame counter — confirms the VBlank loop runs at 50/60 Hz.
-    u16 f = g_engine.frame;
-    char digits[6] = {0};
-    digits[4] = '0' + (f % 10); f /= 10;
-    digits[3] = '0' + (f % 10); f /= 10;
-    digits[2] = '0' + (f % 10); f /= 10;
-    digits[1] = '0' + (f % 10); f /= 10;
-    digits[0] = '0' + (f % 10);
-    print(digits, plane_xy(9, 25));
-
-    char const * scene_name = "?    ";
-    if      (g_engine.main_thread == title_main_thread) scene_name = "TITLE";
-    else if (g_engine.main_thread == play_main_thread)  scene_name = "PLAY ";
-    print(scene_name, plane_xy(27, 25));
   }
 }
