@@ -54,24 +54,24 @@
 
 static u8 g_web_buf[WEB_BUF_BYTES];
 
-/* Lane MIDPOINT positions — entities (player, shots, flippers) live in
- * the gaps BETWEEN adjacent radial lines, not on the lines themselves,
- * matching Jaguar T2K's lane geometry. g_lane_mid_outer[k] is the
- * midpoint of line endpoints k and k+1 on the outer rim; g_lane_mid_inner
- * is the equivalent on the (offset, smaller) inner rim. */
-static s16 g_lane_mid_outer_x[NUM_LANES];
-static s16 g_lane_mid_outer_y[NUM_LANES];
-static s16 g_lane_mid_inner_x[NUM_LANES];
-static s16 g_lane_mid_inner_y[NUM_LANES];
+/* Lane MIDPOINT positions — entities live in the gaps BETWEEN adjacent
+ * radial lines (T2K convention). Sized to MAX_LANES (17, the largest
+ * T2K web); the current shape's `g_lane_count` says how many of these
+ * slots are actually live. */
+static s16 g_lane_mid_outer_x[MAX_LANES];
+static s16 g_lane_mid_outer_y[MAX_LANES];
+static s16 g_lane_mid_inner_x[MAX_LANES];
+static s16 g_lane_mid_inner_y[MAX_LANES];
 
-/* web_render_main still draws lines between line endpoints (recomputed on
- * the fly from the rim[] table) — those are NOT lane midpoints. */
+/* Per-shape active lane count + open/closed flag, populated by web_init. */
+static u8 g_lane_count;
+static u8 g_shape_closed;
 
 /* Which of the 16 pre-rotated claws best faces inward from each lane's
  * rim point. Filled by web_init() per shape — radial shapes (CIRCLE,
  * OCTAGON, etc.) end up with claw_idx == lane, but non-radial shapes
  * (FAN, where every lane is on a horizontal line) get a per-lane choice. */
-static u8 g_player_claw_idx[NUM_LANES];
+static u8 g_player_claw_idx[MAX_LANES];
 
 /* Rolling-claw animation state. `g_claw_render_idx` is what render_sprites
  * actually shows; `g_claw_spin_steps` counts down a fresh revolution
@@ -112,10 +112,11 @@ static inline s16 web_scale(s8 v)
   return (s16) t;
 }
 
-/* ---- 16-lane rim offsets — one table per shape ---------------------------
+/* ---- Per-shape rim tables ------------------------------------------------
  * Each lane's (dx, dy) is the offset from web centre to that lane's rim,
- * in pixels at the base radius (60). web_scale() rescales to render radius
- * (80). Lane 0 points "down" (+Y), going clockwise to lane 15. */
+ * at the base radius (60). web_scale() rescales to render radius. Lane
+ * count per shape varies (11..17, matching T2K) — see WEB_LANE_COUNT and
+ * WEB_CLOSED below. Closed shapes wrap lane N-1 → 0; open ones clamp. */
 
 static const s8 WEB_RIM_CIRCLE[16][2] = {
   {   0,  60 }, {  23,  55 }, {  42,  42 }, {  55,  23 },
@@ -131,12 +132,16 @@ static const s8 WEB_RIM_SQUARE[16][2] = {
   { -60,   0 }, { -60,  25 }, { -60,  60 }, { -25,  60 },
 };
 
-/* PLUS / cross — cardinal arms reach out, diagonals are pulled back. */
+/* PLUS / cross — rectangular cross with 16 vertices tracing the outline:
+ * 4 arm-tip centres + 8 arm-tip side corners + 4 inner corners between
+ * arms. Arm half-width is 20 (out of 60 max), giving arms ~2/3 as long
+ * as they are wide. Each arm has 4 lanes around it (2 along the tip,
+ * 2 along the sides) so the player walks the perimeter recognisably. */
 static const s8 WEB_RIM_PLUS[16][2] = {
-  {   0,  60 }, {   8,  25 }, {  15,  15 }, {  25,   8 },
-  {  60,   0 }, {  25,  -8 }, {  15, -15 }, {   8, -25 },
-  {   0, -60 }, {  -8, -25 }, { -15, -15 }, { -25,  -8 },
-  { -60,   0 }, { -25,   8 }, { -15,  15 }, {  -8,  25 },
+  {   0,  60 }, {  20,  60 }, {  20,  20 }, {  60,  20 },
+  {  60,   0 }, {  60, -20 }, {  20, -20 }, {  20, -60 },
+  {   0, -60 }, { -20, -60 }, { -20, -20 }, { -60, -20 },
+  { -60,   0 }, { -60,  20 }, { -20,  20 }, { -20,  60 },
 };
 
 /* Diamond — like square but rotated 45°. */
@@ -163,20 +168,23 @@ static const s8 WEB_RIM_OCTAGON[16][2] = {
   { -60,   0 }, { -51,  21 }, { -42,  42 }, { -21,  51 },
 };
 
-/* Star — 8-pointed: even lanes at full radius 60, odd lanes pulled in. */
-static const s8 WEB_RIM_STAR[16][2] = {
-  {   0,  60 }, {  11,  28 }, {  42,  42 }, {  28,  11 },
-  {  60,   0 }, {  28, -11 }, {  42, -42 }, {  11, -28 },
-  {   0, -60 }, { -11, -28 }, { -42, -42 }, { -28, -11 },
-  { -60,   0 }, { -28,  11 }, { -42,  42 }, { -11,  28 },
+/* Star — extracted from T2K's web22 ("tiny star", 12 lanes closed).
+ * 6-pointed (alternating point/valley) instead of our previous 8-pointed.
+ * Bounding box (3..13, 3..13), centred (8, 8) and scaled by 12 so max
+ * coord = 60. */
+static const s8 WEB_RIM_STAR[12][2] = {
+  { -12, -36 }, { -36, -12 }, { -60,   0 }, { -36,  12 },
+  { -12,  36 }, {   0,  60 }, {  12,  36 }, {  36,  12 },
+  {  60,   0 }, {  36, -12 }, {  12, -36 }, {   0, -60 },
 };
 
-/* Fan / Line — all 16 rim points along a horizontal line at +40. */
-static const s8 WEB_RIM_FAN[16][2] = {
-  { -60,  40 }, { -52,  40 }, { -44,  40 }, { -36,  40 },
-  { -28,  40 }, { -20,  40 }, { -12,  40 }, {  -4,  40 },
-  {   4,  40 }, {  12,  40 }, {  20,  40 }, {  28,  40 },
-  {  36,  40 }, {  44,  40 }, {  52,  40 }, {  60,  40 },
+/* Fan / Flat plane — extracted from T2K's web1 (open, 12 vertices = 11 lanes).
+ * Horizontal line at the bottom of the playfield; the player walks
+ * left-right along it without wrap. */
+static const s8 WEB_RIM_FAN[12][2] = {
+  { -55,  40 }, { -45,  40 }, { -35,  40 }, { -25,  40 },
+  { -15,  40 }, {  -5,  40 }, {   5,  40 }, {  15,  40 },
+  {  25,  40 }, {  35,  40 }, {  45,  40 }, {  55,  40 },
 };
 
 const char * const WEB_SHAPE_NAMES[WEB_SHAPE_COUNT] = {
@@ -189,6 +197,23 @@ static const s8 (* const WEB_RIMS[WEB_SHAPE_COUNT])[2] = {
   WEB_RIM_TRIANGLE, WEB_RIM_OCTAGON, WEB_RIM_STAR,  WEB_RIM_FAN,
 };
 
+/* Per-shape lane count + closed flag (1 = wraps lane N-1→0; 0 = clamps).
+ * Each WEB_RIMS[i] must have exactly WEB_LANE_COUNT[i] entries. */
+static const u8 WEB_LANE_COUNT[WEB_SHAPE_COUNT] = {
+  16,   /* CIRCLE   */
+  16,   /* SQUARE   */
+  16,   /* PLUS     */
+  16,   /* DIAMOND  */
+  16,   /* TRIANGLE */
+  16,   /* OCTAGON  */
+  12,   /* STAR     — T2K's 12-vertex tiny-star */
+  12,   /* FAN      — T2K's 12-vertex flat plane (open) */
+};
+static const u8 WEB_CLOSED[WEB_SHAPE_COUNT] = {
+  1, 1, 1, 1, 1, 1, 1,
+  0,   /* FAN is the only open shape — player walks the line, no wrap. */
+};
+
 u8 g_web_shape = WEB_SHAPE_CIRCLE;
 
 // ---- Lane projection ------------------------------------------------------
@@ -196,12 +221,15 @@ u8 g_web_shape = WEB_SHAPE_CIRCLE;
 void web_init(void)
 {
   const s8 (*rim)[2] = WEB_RIMS[g_web_shape];
+  g_lane_count   = WEB_LANE_COUNT[g_web_shape];
+  g_shape_closed = WEB_CLOSED[g_web_shape];
+  u8 const N     = g_lane_count;
 
-  /* Compute the 16 line endpoints first (locally — only the lane
-   * midpoints derived from them are stored globally). */
-  s16 line_outer_x[NUM_LANES], line_outer_y[NUM_LANES];
-  s16 line_inner_x[NUM_LANES], line_inner_y[NUM_LANES];
-  for (u8 i = 0; i < NUM_LANES; ++i) {
+  /* Compute the line endpoints (locally — only the lane midpoints
+   * derived from them are stored globally). MAX_LANES is the cap. */
+  s16 line_outer_x[MAX_LANES], line_outer_y[MAX_LANES];
+  s16 line_inner_x[MAX_LANES], line_inner_y[MAX_LANES];
+  for (u8 i = 0; i < N; ++i) {
     s16 sx = web_scale(rim[i][0]);
     s16 sy = web_scale(rim[i][1]);
     line_outer_x[i] = (s16) (WEB_CENTER_X + sx);
@@ -210,19 +238,25 @@ void web_init(void)
     line_inner_y[i] = (s16) (WEB_CENTER_Y + WEB_VANISH_OFFSET_Y + (sy >> 3));
   }
 
-  /* Lane midpoints = average of adjacent line endpoints. Lane k sits
-   * BETWEEN line k and line k+1 (mod 16) — same convention as T2K. */
-  for (u8 i = 0; i < NUM_LANES; ++i) {
-    u8 j = (u8) ((i + 1) & 0x0F);
+  /* Lane midpoints = average of adjacent line endpoints. For closed
+   * shapes lane k sits between line k and line (k+1) mod N. For open
+   * shapes (FAN) only lanes 0..N-2 exist, between consecutive lines. */
+  u8 lane_segments = (u8) (g_shape_closed ? N : N - 1);
+  for (u8 i = 0; i < lane_segments; ++i) {
+    u8 j = (u8) (i + 1);
+    if (j >= N) j = 0;
     g_lane_mid_outer_x[i] = (s16) ((line_outer_x[i] + line_outer_x[j]) >> 1);
     g_lane_mid_outer_y[i] = (s16) ((line_outer_y[i] + line_outer_y[j]) >> 1);
     g_lane_mid_inner_x[i] = (s16) ((line_inner_x[i] + line_inner_x[j]) >> 1);
     g_lane_mid_inner_y[i] = (s16) ((line_inner_y[i] + line_inner_y[j]) >> 1);
   }
+  /* For open shapes, g_lane_count is still N (vertex count) but only
+   * N-1 lanes are real. Player_lane will be clamped to 0..N-2. */
+  if (!g_shape_closed) g_lane_count = lane_segments;
 
   /* Pick the claw rotation that best points from each lane midpoint
-   * toward the web's centre via dot-product over 16 directions. */
-  for (u8 i = 0; i < NUM_LANES; ++i) {
+   * toward the web's centre via dot-product over the 16 claw orientations. */
+  for (u8 i = 0; i < g_lane_count; ++i) {
     s16 tx = (s16) (WEB_CENTER_X - g_lane_mid_outer_x[i]);
     s16 ty = (s16) (WEB_CENTER_Y - g_lane_mid_outer_y[i]);
     u8 best = 0;
@@ -241,6 +275,25 @@ void web_init(void)
   g_slide_from_lane  = 0;
   g_slide_to_lane    = 0;
   g_slide_progress   = SLIDE_FRAMES;
+}
+
+// ---- Lane arithmetic helpers --------------------------------------------
+
+u8 web_lane_count(void) { return g_lane_count; }
+
+u8 web_lane_left(u8 current)
+{
+  if (current > 0) return (u8) (current - 1);
+  /* current == 0: wrap to last lane if closed, else stay. */
+  return g_shape_closed ? (u8) (g_lane_count - 1) : 0;
+}
+
+u8 web_lane_right(u8 current)
+{
+  u8 next = (u8) (current + 1);
+  if (next < g_lane_count) return next;
+  /* past last lane: wrap to 0 if closed, else stay at last. */
+  return g_shape_closed ? 0 : (u8) (g_lane_count - 1);
 }
 
 // ---- Rolling-claw animation + position slide -----------------------------
@@ -406,20 +459,29 @@ static void web_fill_quad(s16 x0, s16 y0, s16 x1, s16 y1,
   }
 }
 
-#define WEB_FILL_PAL  5     /* dark blue/purple, matches T2K's filled web look */
+/* Lane fill = 4-band gradient from deep (near vanishing point, inner) to
+ * bright (near rim, outer). Palette indices 5..8 are set up in main.c
+ * to step from dark navy → medium → brighter → brightest blue/purple. */
+#define WEB_FILL_BANDS  4
+#define WEB_FILL_PAL_0  5      /* darkest, at depth 0..1/4   (innermost) */
+#define WEB_FILL_PAL_1  6
+#define WEB_FILL_PAL_2  7
+#define WEB_FILL_PAL_3  8      /* brightest, at depth 3/4..1 (outer rim) */
 
 void web_render_main(u8 pal)
 {
   const s8 (*rim)[2] = WEB_RIMS[g_web_shape];
+  u8 const V = WEB_LANE_COUNT[g_web_shape];        /* vertex count = N */
+  u8 const S = g_shape_closed ? V : (u8) (V - 1);  /* number of lane segments */
   for (u16 i = 0; i < WEB_BUF_BYTES; ++i) g_web_buf[i] = 0;
   s16 const cx = WEB_IMG_W / 2;
   s16 const cy = WEB_IMG_H / 2;
 
-  /* Precompute line-endpoint positions for all 16 boundary lines, both
+  /* Precompute line-endpoint positions for all V boundary lines, both
    * the inner (vanishing-end) and outer (rim) corners. The inner end is
    * at 1/8 scale and lifted by WEB_VANISH_OFFSET_Y for the perspective. */
-  s16 ox[16], oy[16], ix[16], iy[16];
-  for (u8 k = 0; k < 16; ++k) {
+  s16 ox[MAX_LANES], oy[MAX_LANES], ix[MAX_LANES], iy[MAX_LANES];
+  for (u8 k = 0; k < V; ++k) {
     s16 sx = web_scale(rim[k][0]);
     s16 sy = web_scale(rim[k][1]);
     ox[k] = (s16) (cx + sx);
@@ -428,30 +490,50 @@ void web_render_main(u8 pal)
     iy[k] = (s16) (cy + (sy >> 3) + WEB_VANISH_OFFSET_Y);
   }
 
-  /* 1. FILL each lane (between line k and line k+1) with WEB_FILL_PAL —
-   * gives the web a solid body, T2K-style. Vertices in CCW order around
-   * the trapezoid: inner-k → outer-k → outer-k+1 → inner-k+1. */
-  for (u8 k = 0; k < 16; ++k) {
-    u8 j = (u8) ((k + 1) & 0x0F);
-    web_fill_quad(ix[k], iy[k],
-                  ox[k], oy[k],
-                  ox[j], oy[j],
-                  ix[j], iy[j], WEB_FILL_PAL);
+  /* 1. FILL each lane segment with a 4-band depth gradient. */
+  static const u8 BAND_PAL[WEB_FILL_BANDS] = {
+    WEB_FILL_PAL_0, WEB_FILL_PAL_1, WEB_FILL_PAL_2, WEB_FILL_PAL_3,
+  };
+  for (u8 k = 0; k < S; ++k) {
+    u8 j = (u8) (k + 1);
+    if (j >= V) j = 0;
+    s16 dxk = (s16) (ox[k] - ix[k]);
+    s16 dyk = (s16) (oy[k] - iy[k]);
+    s16 dxj = (s16) (ox[j] - ix[j]);
+    s16 dyj = (s16) (oy[j] - iy[j]);
+    for (u8 b = 0; b < WEB_FILL_BANDS; ++b) {
+      s16 lo = (s16) (b << 2);
+      s16 hi = (s16) ((b + 1) << 2);
+      s16 x_k_lo = (s16) (ix[k] + ((dxk * lo) >> 4));
+      s16 y_k_lo = (s16) (iy[k] + ((dyk * lo) >> 4));
+      s16 x_k_hi = (s16) (ix[k] + ((dxk * hi) >> 4));
+      s16 y_k_hi = (s16) (iy[k] + ((dyk * hi) >> 4));
+      s16 x_j_lo = (s16) (ix[j] + ((dxj * lo) >> 4));
+      s16 y_j_lo = (s16) (iy[j] + ((dyj * lo) >> 4));
+      s16 x_j_hi = (s16) (ix[j] + ((dxj * hi) >> 4));
+      s16 y_j_hi = (s16) (iy[j] + ((dyj * hi) >> 4));
+      web_fill_quad(x_k_lo, y_k_lo,
+                    x_k_hi, y_k_hi,
+                    x_j_hi, y_j_hi,
+                    x_j_lo, y_j_lo, BAND_PAL[b]);
+    }
   }
 
-  /* 2. Radial lines from inner to outer, drawn on top of the fill. */
-  for (u8 k = 0; k < 16; ++k)
+  /* 2. Radial lines (one per vertex). */
+  for (u8 k = 0; k < V; ++k)
     web_line(ix[k], iy[k], ox[k], oy[k], pal);
 
-  /* 3. Outer rim polygon. */
-  for (u8 k = 0; k < 16; ++k) {
-    u8 j = (u8) ((k + 1) & 0x0F);
+  /* 3. Outer rim polygon — only S segments (no wrap on open shapes). */
+  for (u8 k = 0; k < S; ++k) {
+    u8 j = (u8) (k + 1);
+    if (j >= V) j = 0;
     web_line(ox[k], oy[k], ox[j], oy[j], pal);
   }
 
-  /* 4. Inner rim polygon. */
-  for (u8 k = 0; k < 16; ++k) {
-    u8 j = (u8) ((k + 1) & 0x0F);
+  /* 4. Inner rim polygon — same N-1 / N. */
+  for (u8 k = 0; k < S; ++k) {
+    u8 j = (u8) (k + 1);
+    if (j >= V) j = 0;
     web_line(ix[k], iy[k], ix[j], iy[j], pal);
   }
 }

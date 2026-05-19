@@ -271,8 +271,11 @@ static void play_gated_vblank(void)
   // L/R lane hop with hold-to-repeat cooldown.
   if (p1_hold & PAD_LEFT) {
     if (g_left_tick == 0) {
-      g_player_lane = (u8) ((g_player_lane + NUM_LANES - 1) % NUM_LANES);
-      web_lane_changed(g_player_lane, +1);   /* +1 = visual CCW = LEFT */
+      u8 new_lane = web_lane_left(g_player_lane);
+      if (new_lane != g_player_lane) {
+        g_player_lane = new_lane;
+        web_lane_changed(g_player_lane, +1);   /* +1 = visual CCW = LEFT */
+      }
       g_left_tick = (p1_single & PAD_LEFT) ? LANE_HOLD_INITIAL : LANE_HOLD_REPEAT;
     } else {
       g_left_tick--;
@@ -282,8 +285,11 @@ static void play_gated_vblank(void)
   }
   if (p1_hold & PAD_RIGHT) {
     if (g_right_tick == 0) {
-      g_player_lane = (u8) ((g_player_lane + 1) % NUM_LANES);
-      web_lane_changed(g_player_lane, -1);   /* -1 = visual CW = RIGHT */
+      u8 new_lane = web_lane_right(g_player_lane);
+      if (new_lane != g_player_lane) {
+        g_player_lane = new_lane;
+        web_lane_changed(g_player_lane, -1);   /* -1 = visual CW = RIGHT */
+      }
       g_right_tick = (p1_single & PAD_RIGHT) ? LANE_HOLD_INITIAL : LANE_HOLD_REPEAT;
     } else {
       g_right_tick--;
@@ -305,7 +311,13 @@ static void play_gated_vblank(void)
   // Spawn a flipper every spawn_period frames, capped.
   if (g_spawn_timer) g_spawn_timer--;
   if (g_spawn_timer == 0 && g_flipper_count < FLIPPER_MAX_ACTIVE) {
-    spawn_flipper((u8) (lcg() & 0x0F));
+    /* Pick a random lane in [0, lane_count). lcg() & 0x1F gives 0..31;
+     * clamp into the valid range with a couple of subtractions to keep
+     * us off __umodsi3. Slight bias toward low lanes is fine here. */
+    u8 lane = (u8) (lcg() & 0x1F);
+    u8 lc   = web_lane_count();
+    while (lane >= lc) lane = (u8) (lane - lc);
+    spawn_flipper(lane);
     g_spawn_timer = FLIPPER_SPAWN_PERIOD;
   }
 
@@ -450,7 +462,12 @@ void main(void)
   cram[1]  = 0x0EEE;          // 1 white   — text, UI, player
   cram[2]  = 0x000E;          // 2 red     — enemy sprites
   cram[4]  = 0x00EE;          // 4 yellow  — web outline lines
-  cram[5]  = 0x0402;          // 5 deep purple-blue — web lane FILL
+  /* Web lane fill gradient: 4 bands from deep (inner, far) to bright
+   * (outer rim, near). All in the blue/purple family for that T2K vibe. */
+  cram[5]  = 0x0200;          // 5 darkest navy — innermost band
+  cram[6]  = 0x0412;          // 6 dark blue
+  cram[7]  = 0x0624;          // 7 medium blue
+  cram[8]  = 0x0846;          // 8 brightest blue-purple — outermost band
   cram[15] = 0x0AAA;          // 15 gray   — dim accent
   update_cram();
 
@@ -461,6 +478,51 @@ void main(void)
   vdp_dma_transfer(res_basic_font.data, to_vdp_addr(tile_offset(0x20)),
                    (u16) (res_basic_font.size / 2));
   vdp_ctrl = mode2_display_off;
+
+  /* Star tile data — 4 variants with the bright pixel in different cell
+   * positions so a scatter on plane A looks like an actual starfield
+   * rather than a regular grid. All use palette index 1 (white). */
+  static const char STAR_TILES[4 * 32] = {
+    /* tile 0x10 — dot near top-left */
+    0x00,0x00,0x00,0x00,  0x00,0x10,0x00,0x00,  0x00,0x00,0x00,0x00,  0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,  0x00,0x00,0x00,0x00,  0x00,0x00,0x00,0x00,  0x00,0x00,0x00,0x00,
+    /* tile 0x11 — dot near centre-right */
+    0x00,0x00,0x00,0x00,  0x00,0x00,0x00,0x00,  0x00,0x00,0x00,0x00,  0x00,0x00,0x00,0x10,
+    0x00,0x00,0x00,0x00,  0x00,0x00,0x00,0x00,  0x00,0x00,0x00,0x00,  0x00,0x00,0x00,0x00,
+    /* tile 0x12 — dot near bottom */
+    0x00,0x00,0x00,0x00,  0x00,0x00,0x00,0x00,  0x00,0x00,0x00,0x00,  0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,  0x00,0x00,0x00,0x00,  0x00,0x10,0x00,0x00,  0x00,0x00,0x00,0x00,
+    /* tile 0x13 — dot near centre */
+    0x00,0x00,0x00,0x00,  0x00,0x00,0x00,0x00,  0x00,0x00,0x00,0x00,  0x00,0x00,0x10,0x00,
+    0x00,0x00,0x00,0x00,  0x00,0x00,0x00,0x00,  0x00,0x00,0x00,0x00,  0x00,0x00,0x00,0x00,
+  };
+  vdp_ctrl = mode2_dma_enable;
+  vdp_dma_transfer(STAR_TILES, to_vdp_addr(tile_offset(0x10)),
+                   (u16) ((sizeof STAR_TILES) / 2));
+  vdp_ctrl = mode2_display_off;
+
+  /* Paint plane A with a sparse, pseudo-random scatter of star tiles in
+   * cells OUTSIDE the web region (cells 7..32, 1..26). Inside the web
+   * region we leave plane A transparent so the filled web on plane B
+   * shows through. Uses 32-bit xorshift with the classic (13,17,5)
+   * constants — the previous 16-bit version had a short cycle and
+   * clustered all matches at the end of the iteration. */
+  {
+    u32 r = 0xCAFEF00Du;
+    for (u8 cy = 0; cy < 28; ++cy) {
+      for (u8 cx = 0; cx < 40; ++cx) {
+        if (cx >= 7 && cx <= 32 && cy >= 1 && cy <= 26) continue;
+        r ^= r << 13;
+        r ^= r >> 17;
+        r ^= r << 5;
+        if ((r & 0x0F) == 0) {                 /* ~1/16 of cells = a star */
+          u16 tile = (u16) (0x10 + ((r >> 4) & 0x03));   /* 4 variants */
+          vdp_ctrl_32 = plane_xy(cx, cy);
+          vdp_data = tile;
+        }
+      }
+    }
+  }
 
   g_mcd_present = detect_mega_cd();
   if (g_mcd_present) mcd_init();

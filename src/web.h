@@ -10,9 +10,20 @@
 #include <types.h>
 #include "entity.h"
 
+/* MAX_LANES is the upper bound for storage; the actual number of lanes
+ * per web shape comes from its own definition (T2K webs range from 7 to
+ * 17 lanes). NUM_LANES is kept as a legacy alias for code that still
+ * assumes 16. */
+#define MAX_LANES      17
 #define NUM_LANES      16
 #define WEB_CENTER_X  160
 #define WEB_CENTER_Y  112
+
+/* Helpers for moving between lanes — handle modular arithmetic + the
+ * open/closed distinction (closed shapes wrap, open shapes clamp). */
+u8 web_lane_count(void);
+u8 web_lane_left(u8 current);
+u8 web_lane_right(u8 current);
 
 typedef enum {
   WEB_SHAPE_CIRCLE = 0,
