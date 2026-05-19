@@ -272,6 +272,7 @@ static void play_gated_vblank(void)
   if (p1_hold & PAD_LEFT) {
     if (g_left_tick == 0) {
       g_player_lane = (u8) ((g_player_lane + NUM_LANES - 1) % NUM_LANES);
+      web_lane_changed(g_player_lane, +1);   /* +1 = visual CCW = LEFT */
       g_left_tick = (p1_single & PAD_LEFT) ? LANE_HOLD_INITIAL : LANE_HOLD_REPEAT;
     } else {
       g_left_tick--;
@@ -282,6 +283,7 @@ static void play_gated_vblank(void)
   if (p1_hold & PAD_RIGHT) {
     if (g_right_tick == 0) {
       g_player_lane = (u8) ((g_player_lane + 1) % NUM_LANES);
+      web_lane_changed(g_player_lane, -1);   /* -1 = visual CW = RIGHT */
       g_right_tick = (p1_single & PAD_RIGHT) ? LANE_HOLD_INITIAL : LANE_HOLD_REPEAT;
     } else {
       g_right_tick--;
@@ -291,6 +293,7 @@ static void play_gated_vblank(void)
   }
 
   if (g_player) g_player->lane = g_player_lane;
+  web_claw_tick(g_player_lane);
 
   // Fire on A (with cooldown).
   if (g_fire_cooldown) g_fire_cooldown--;
@@ -368,6 +371,7 @@ static void play_gated_vblank(void)
       if (f->type == E_FLIPPER && f->phase == 1 && f->lane == g_player_lane) {
         g_player_lane = 0;
         g_player->lane = 0;
+        web_player_snap_to(0);    /* match visual to logical respawn position */
         kill_flipper(f);
         if (g_mcd_present) mcd_play_sfx(2);    /* 2 = DEATH — PCM */
         else               sfx_death();         /* PSG fallback */

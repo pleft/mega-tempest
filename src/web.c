@@ -31,6 +31,13 @@
 #define WEB_CELLS_H 26
 #define WEB_BUF_BYTES (WEB_CELLS_W * WEB_CELLS_H * 32)   /* 21632 bytes */
 
+/* Perspective: the inner "vanishing" shape sits offset from the geometric
+ * centre, so the web reads as a tilted tube (vanishing point above the
+ * outer rim's centre — you're looking slightly down into the playfield).
+ * Positive = downward; for a Tempest-style "look down the tube" we use
+ * negative = inner shape lifted upward. */
+#define WEB_VANISH_OFFSET_Y  (-25)
+
 /* Sprite-tile VRAM slots (data from src/sprites.{c,h}, baked by
  * tools/extract_mcd_sprites.py from tempest2k-source/src/obj2d.s).
  * Player is 16 pre-rotated claws (one per lane) packed contiguously so we
@@ -49,11 +56,34 @@ static u8 g_web_buf[WEB_BUF_BYTES];
 static s16 g_lane_rim_x[NUM_LANES];
 static s16 g_lane_rim_y[NUM_LANES];
 
+/* Inner-rim (vanishing) points — at 1/4 the rim distance from centre, so
+ * the web has a "tunnel" 3D feel rather than all lines converging at a
+ * single point. Filled alongside rim points in web_init. */
+static s16 g_lane_inner_x[NUM_LANES];
+static s16 g_lane_inner_y[NUM_LANES];
+
 /* Which of the 16 pre-rotated claws best faces inward from each lane's
  * rim point. Filled by web_init() per shape — radial shapes (CIRCLE,
  * OCTAGON, etc.) end up with claw_idx == lane, but non-radial shapes
  * (FAN, where every lane is on a horizontal line) get a per-lane choice. */
 static u8 g_player_claw_idx[NUM_LANES];
+
+/* Rolling-claw animation state. `g_claw_render_idx` is what render_sprites
+ * actually shows; `g_claw_spin_steps` counts down a fresh revolution
+ * triggered by each lane change. */
+static u8 g_claw_render_idx;
+static u8 g_claw_spin_steps;
+static s8 g_claw_spin_dir;
+#define CLAW_SPIN_STEPS_PER_LANE  16     /* one full revolution per move */
+#define CLAW_SPIN_STEPS_PER_FRAME 4      /* finishes in 4 frames = LANE_HOLD_REPEAT */
+
+/* Player-slide animation. When a lane changes the player visually slides
+ * from the old lane's rim position to the new one's over SLIDE_FRAMES
+ * frames, so the claw glides instead of jumping. */
+static u8 g_slide_from_lane;
+static u8 g_slide_to_lane;
+static u8 g_slide_progress;              /* 0..SLIDE_FRAMES (at target) */
+#define SLIDE_FRAMES 4                   /* matches LANE_HOLD_REPEAT */
 
 /* Direction each claw "opens toward", as int8 scaled by 64.
  * Derived from native UP = (0,-1) rotated by -L*π/8 (matches the
@@ -162,8 +192,15 @@ void web_init(void)
 {
   const s8 (*rim)[2] = WEB_RIMS[g_web_shape];
   for (u8 i = 0; i < NUM_LANES; ++i) {
-    g_lane_rim_x[i] = (s16) (WEB_CENTER_X + web_scale(rim[i][0]));
-    g_lane_rim_y[i] = (s16) (WEB_CENTER_Y + web_scale(rim[i][1]));
+    s16 sx = web_scale(rim[i][0]);
+    s16 sy = web_scale(rim[i][1]);
+    g_lane_rim_x[i]   = (s16) (WEB_CENTER_X + sx);
+    g_lane_rim_y[i]   = (s16) (WEB_CENTER_Y + sy);
+    /* Inner point at 1/4 the rim distance (signed shift right by 2) — gives
+     * the "tunnel" 3D shape from each lane's rim down toward a small inner
+     * copy of the same outline. */
+    g_lane_inner_x[i] = (s16) (WEB_CENTER_X + (sx >> 3));
+    g_lane_inner_y[i] = (s16) (WEB_CENTER_Y + WEB_VANISH_OFFSET_Y + (sy >> 3));
   }
 
   /* Pick the claw rotation that best points from each rim toward the centre.
@@ -180,17 +217,89 @@ void web_init(void)
     }
     g_player_claw_idx[i] = best;
   }
+
+  /* Reset animation state to a settled-at-lane-0 baseline. */
+  g_claw_render_idx  = g_player_claw_idx[0];
+  g_claw_spin_steps  = 0;
+  g_claw_spin_dir    = 1;
+  g_slide_from_lane  = 0;
+  g_slide_to_lane    = 0;
+  g_slide_progress   = SLIDE_FRAMES;
 }
 
+// ---- Rolling-claw animation + position slide -----------------------------
+
+void web_lane_changed(u8 new_lane, s8 dir)
+{
+  /* Position slide: previous TARGET becomes new SOURCE so the player
+   * visually glides between rim points instead of jumping. */
+  g_slide_from_lane = g_slide_to_lane;
+  g_slide_to_lane   = new_lane;
+  g_slide_progress  = 0;
+
+  /* Claw spin: start a fresh revolution. Reset (not accumulate) — the
+   * steady state under hold-to-repeat is one revolution per
+   * LANE_HOLD_REPEAT which already feels like a continuous roll. */
+  g_claw_spin_steps = CLAW_SPIN_STEPS_PER_LANE;
+  g_claw_spin_dir   = (dir >= 0) ? 1 : -1;
+}
+
+void web_claw_tick(u8 current_lane)
+{
+  /* Advance the slide first so render_sprites sees a fresh interpolated
+   * position alongside the up-to-date claw_render_idx. */
+  if (g_slide_progress < SLIDE_FRAMES) g_slide_progress++;
+
+  if (g_claw_spin_steps > 0) {
+    u8 steps = (g_claw_spin_steps >= CLAW_SPIN_STEPS_PER_FRAME)
+                  ? CLAW_SPIN_STEPS_PER_FRAME
+                  : g_claw_spin_steps;
+    for (u8 i = 0; i < steps; ++i)
+      g_claw_render_idx = (u8) ((g_claw_render_idx + g_claw_spin_dir + 16) & 0xF);
+    g_claw_spin_steps = (u8) (g_claw_spin_steps - steps);
+    if (g_claw_spin_steps == 0)
+      g_claw_render_idx = g_player_claw_idx[current_lane];   /* settle inward */
+  } else {
+    g_claw_render_idx = g_player_claw_idx[current_lane];
+  }
+}
+
+void web_player_snap_to(u8 lane)
+{
+  /* No animation — used on respawn so visual matches logic immediately. */
+  g_slide_from_lane = lane;
+  g_slide_to_lane   = lane;
+  g_slide_progress  = SLIDE_FRAMES;
+  g_claw_render_idx = g_player_claw_idx[lane];
+  g_claw_spin_steps = 0;
+}
+
+/* Interpolated player position — linear lerp between source and target
+ * lane rim points based on g_slide_progress. SLIDE_FRAMES is a power of 2
+ * (4) so the division is a shift. */
+static void web_player_render_pos(fp16 depth_fp, s16 * out_x, s16 * out_y)
+{
+  s16 fx = web_pixel_x(g_slide_from_lane, depth_fp);
+  s16 fy = web_pixel_y(g_slide_from_lane, depth_fp);
+  s16 tx = web_pixel_x(g_slide_to_lane,   depth_fp);
+  s16 ty = web_pixel_y(g_slide_to_lane,   depth_fp);
+  s16 p = (s16) g_slide_progress;
+  *out_x = (s16) (fx + (s16) (((tx - fx) * p) >> 2));   /* >> 2 = / SLIDE_FRAMES */
+  *out_y = (s16) (fy + (s16) (((ty - fy) * p) >> 2));
+}
+
+/* Interpolate between the inner-rim point (depth=0) and the outer-rim
+ * point (depth=FP_ONE). Shots disappear at the inner rim now, not at the
+ * web's geometric centre. Flippers spawn at the inner rim and travel out. */
 s16 web_pixel_x(u8 lane, fp16 depth_fp)
 {
-  s32 dx = (s32) g_lane_rim_x[lane] - WEB_CENTER_X;
-  return (s16) (WEB_CENTER_X + ((dx * depth_fp) >> 16));
+  s32 dx = (s32) g_lane_rim_x[lane] - g_lane_inner_x[lane];
+  return (s16) (g_lane_inner_x[lane] + ((dx * depth_fp) >> 16));
 }
 s16 web_pixel_y(u8 lane, fp16 depth_fp)
 {
-  s32 dy = (s32) g_lane_rim_y[lane] - WEB_CENTER_Y;
-  return (s16) (WEB_CENTER_Y + ((dy * depth_fp) >> 16));
+  s32 dy = (s32) g_lane_rim_y[lane] - g_lane_inner_y[lane];
+  return (s16) (g_lane_inner_y[lane] + ((dy * depth_fp) >> 16));
 }
 
 // ---- Web rasterisation (main-RAM buffer) ----------------------------------
@@ -230,20 +339,36 @@ void web_render_main(u8 pal)
   s16 const cx = WEB_IMG_W / 2;
   s16 const cy = WEB_IMG_H / 2;
 
-  /* 1. Radial lines from centre to each scaled rim point. */
+  /* 1. Radial lines from INNER rim (offset upward for perspective) to
+   * OUTER rim. The inner is at 1/8 the scaled rim distance, with the
+   * whole inner shape lifted by WEB_VANISH_OFFSET_Y so the web reads as
+   * a tilted tube rather than concentric rings. */
   for (u8 lane = 0; lane < 16; ++lane) {
-    s16 rx = (s16) (cx + web_scale(rim[lane][0]));
-    s16 ry = (s16) (cy + web_scale(rim[lane][1]));
-    web_line(cx, cy, rx, ry, pal);
+    s16 ox = web_scale(rim[lane][0]);
+    s16 oy = web_scale(rim[lane][1]);
+    s16 ix = ox >> 3;
+    s16 iy = (s16) ((oy >> 3) + WEB_VANISH_OFFSET_Y);
+    web_line((s16) (cx + ix), (s16) (cy + iy),
+             (s16) (cx + ox), (s16) (cy + oy), pal);
   }
 
-  /* 2. Rim polygon — connect adjacent rim points. */
+  /* 2. Outer rim polygon — connect adjacent outer points. */
   for (u8 lane = 0; lane < 16; ++lane) {
     u8 next = (u8) ((lane + 1) & 0x0F);
     s16 ax = (s16) (cx + web_scale(rim[lane][0]));
     s16 ay = (s16) (cy + web_scale(rim[lane][1]));
     s16 bx = (s16) (cx + web_scale(rim[next][0]));
     s16 by = (s16) (cy + web_scale(rim[next][1]));
+    web_line(ax, ay, bx, by, pal);
+  }
+
+  /* 3. Inner rim polygon — same shape at 1/4 scale. */
+  for (u8 lane = 0; lane < 16; ++lane) {
+    u8 next = (u8) ((lane + 1) & 0x0F);
+    s16 ax = (s16) (cx + (web_scale(rim[lane][0]) >> 3));
+    s16 ay = (s16) (cy + (web_scale(rim[lane][1]) >> 3) + WEB_VANISH_OFFSET_Y);
+    s16 bx = (s16) (cx + (web_scale(rim[next][0]) >> 3));
+    s16 by = (s16) (cy + (web_scale(rim[next][1]) >> 3) + WEB_VANISH_OFFSET_Y);
     web_line(ax, ay, bx, by, pal);
   }
 }
@@ -348,16 +473,15 @@ void render_sprites(void)
   u8 n = 0;
 
   /* Pass 1: PLAYER first → sprite 0 = highest priority (drawn on top).
-   * Claw rotation is picked per-shape in web_init (g_player_claw_idx)
-   * so the open end always faces the centre, even on FAN where lanes
-   * don't sit on a circle. */
+   * Position interpolates between source and target lane (web_player_render_pos)
+   * and the claw rotation rolls through a full revolution per lane change
+   * (g_claw_render_idx, animated by web_claw_tick). */
   for (Entity * e = g_active_head; e; e = e->next) {
     if (e->type != E_PLAYER || n >= SPR_MAX) continue;
-    s16 px = web_pixel_x(e->lane, e->depth_fp);
-    s16 py = web_pixel_y(e->lane, e->depth_fp);
-    u8 claw = g_player_claw_idx[e->lane];
+    s16 px, py;
+    web_player_render_pos(e->depth_fp, &px, &py);
     SpriteSizeDef sz = { SPR_SIZE_2x2,
-                         (u16) (PLAYER_TILE_BASE + claw * PLAYER_TILES_PER_LANE),
+                         (u16) (PLAYER_TILE_BASE + g_claw_render_idx * PLAYER_TILES_PER_LANE),
                          8 };
     emit_sprite(spr_buf, n++, &sz, px, py);
   }

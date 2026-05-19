@@ -53,4 +53,16 @@ void load_sprite_tiles_to_vram(void);
  * Player goes first in the chain so it draws on top. */
 void render_sprites(void);
 
+/* Rolling-claw animation + position slide. Player has 16 pre-rotated
+ * claw sprites; on a lane change the claw rolls a full revolution AND
+ * slides smoothly from the old rim point to the new one. Call
+ * `web_lane_changed(new_lane, dir)` whenever the player switches lane
+ * (dir = +1 for CCW visual rotation, -1 for CW). Call
+ * `web_claw_tick(lane)` every frame to advance both animations.
+ * `web_player_snap_to(lane)` skips the animation and parks the claw at
+ * the given lane immediately — used on respawn after death. */
+void web_lane_changed(u8 new_lane, s8 dir);
+void web_claw_tick(u8 current_lane);
+void web_player_snap_to(u8 lane);
+
 #endif
