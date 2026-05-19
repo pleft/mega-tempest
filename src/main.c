@@ -462,9 +462,12 @@ static inline s16 web_scale(s8 v)
  * Sprite multi-tile layout is column-major: tile 0 = top-left, tile 1 =
  * below it, tile (height) = top of next column. */
 
-#define FLIPPER_TILE_FAR   0x400        /* 8x8  = 1 tile  */
-#define FLIPPER_TILE_MID   0x410        /* 16x16 = 4 tiles */
-#define FLIPPER_TILE_NEAR  0x420        /* 24x24 = 9 tiles */
+/* Web tiles span $280..$4BF (24x24 = 576 tiles). Sprite tile data must
+ * live AFTER that range or it'll overwrite web tiles and show up as red
+ * splotches on plane B. */
+#define FLIPPER_TILE_FAR   0x4C0        /* 8x8  = 1 tile  */
+#define FLIPPER_TILE_MID   0x4D0        /* 16x16 = 4 tiles */
+#define FLIPPER_TILE_NEAR  0x4E0        /* 24x24 = 9 tiles (unused) */
 
 #define DIAMOND_PAL  2                  /* palette index for enemy sprites */
 
