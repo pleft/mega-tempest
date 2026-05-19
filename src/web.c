@@ -25,9 +25,14 @@
 #define WEB_CELLS_H 24
 #define WEB_BUF_BYTES (WEB_CELLS_W * WEB_CELLS_H * 32)   /* 18432 bytes */
 
-#define FLIPPER_TILE_FAR   0x4C0        /* 8x8  = 1 tile  */
-#define FLIPPER_TILE_MID   0x4D0        /* 16x16 = 4 tiles */
-#define DIAMOND_PAL        2            /* palette index for enemy sprites */
+#define FLIPPER_TILE_FAR   0x4C0        /* 8x8  = 1 tile, red filled diamond */
+#define FLIPPER_TILE_MID   0x4D0        /* 16x16 = 4 tiles, red filled diamond */
+#define PLAYER_TILE        0x4E0        /* 16x16 = 4 tiles, yellow diamond outline */
+#define SHOT_TILE          0x4F0        /* 8x8 = 1 tile, white filled diamond */
+
+#define ENEMY_PAL          2            /* red — enemy sprites */
+#define PLAYER_PAL         4            /* yellow — player (matches web colour) */
+#define SHOT_PAL           1            /* white — shots */
 
 #define SPR_TABLE_VRAM 0xb800
 #define SPR_MAX 32
@@ -237,92 +242,147 @@ void web_clear_plane_b(void)
 
 // ---- Enemy sprite tile data -----------------------------------------------
 
-/* Filled diamond of N×N pixels (N must be a multiple of 8) into `out` in
- * VDP tile format, column-major across the sprite's tiles. */
+/* Plot one pixel (col, row) into an N×N sprite tile buffer at palette `pal`.
+ * Column-major tile layout (matches VDP sprite multi-tile order). */
+static void plot_into_tile_buf(u8 N, s16 col, s16 row, u8 pal, u8 * out)
+{
+  if ((u16) col >= N || (u16) row >= N) return;
+  u8 tiles_per_col = (u8) (N / 8);
+  u8 tile_col = (u8) (col / 8);
+  u8 tile_row = (u8) (row / 8);
+  u8 local_col = (u8) (col & 7);
+  u8 local_row = (u8) (row & 7);
+  u16 tile_idx = (u16) ((u16) tile_col * tiles_per_col + tile_row);
+  u16 byte_off = (u16) (tile_idx * 32 + local_row * 4 + local_col / 2);
+  if (local_col & 1)
+    out[byte_off] = (u8) ((out[byte_off] & 0xF0) | (pal & 0x0F));
+  else
+    out[byte_off] = (u8) ((out[byte_off] & 0x0F) | ((pal & 0x0F) << 4));
+}
+
+/* Filled diamond of N×N pixels (N must be a multiple of 8). */
 static void make_diamond(u8 N, u8 pal, u8 * out)
 {
   u16 total_bytes = (u16) ((u16) N * N / 2);
   for (u16 i = 0; i < total_bytes; ++i) out[i] = 0;
 
-  u8 tiles_per_col = (u8) (N / 8);
   u8 center = (u8) (N / 2);
-
   for (u8 row = 0; row < N; ++row) {
     u8 d = (row < center) ? row : (u8) (N - 1 - row);
-    u8 half = (u8) (d + 1);
-    s16 lo = (s16) center - half;
-    s16 hi = (s16) center + half - 1;
-    for (s16 col = lo; col <= hi; ++col) {
-      u8 tile_col = (u8) (col / 8);
-      u8 tile_row = (u8) (row / 8);
-      u8 local_col = (u8) (col & 7);
-      u8 local_row = (u8) (row & 7);
-      u16 tile_idx = (u16) ((u16) tile_col * tiles_per_col + tile_row);
-      u16 byte_off = (u16) (tile_idx * 32 + local_row * 4 + local_col / 2);
-      if (local_col & 1)
-        out[byte_off] |= (pal & 0x0F);
-      else
-        out[byte_off] |= (u8) ((pal & 0x0F) << 4);
-    }
+    s16 lo = (s16) center - (s16) (d + 1);
+    s16 hi = (s16) center + (s16) d;
+    for (s16 col = lo; col <= hi; ++col)
+      plot_into_tile_buf(N, col, row, pal, out);
+  }
+}
+
+/* Diamond outline (1-pixel border, transparent inside) — for the player so
+ * it's clearly distinguishable from the flipper's filled diamond. */
+static void make_diamond_outline(u8 N, u8 pal, u8 * out)
+{
+  u16 total_bytes = (u16) ((u16) N * N / 2);
+  for (u16 i = 0; i < total_bytes; ++i) out[i] = 0;
+
+  u8 center = (u8) (N / 2);
+  for (u8 row = 0; row < N; ++row) {
+    u8 d = (row < center) ? row : (u8) (N - 1 - row);
+    s16 left  = (s16) center - (s16) (d + 1);
+    s16 right = (s16) center + (s16) d;
+    plot_into_tile_buf(N, left,  row, pal, out);
+    plot_into_tile_buf(N, right, row, pal, out);
   }
 }
 
 /* Sprite size encoding: VDP byte 2, bits 3-2 = V size-1, bits 1-0 = H size-1.
- *  1x1: 0x00,  2x2: 0x05.  Plus VRAM tile base + half-extent for centring. */
+ *   1x1 (8x8):   size_byte=0x00, 1 tile,  16 words
+ *   2x2 (16x16): size_byte=0x05, 4 tiles, 64 words
+ * `half` is half the sprite extent in screen pixels, for centring. */
+#define SPR_SIZE_1x1  0x00
+#define SPR_SIZE_2x2  0x05
 typedef struct { u8 size_byte; u16 tile_base; u8 half; } SpriteSizeDef;
 static const SpriteSizeDef FLIPPER_SIZES[2] = {
-  { 0x00, FLIPPER_TILE_FAR, 4 },       /*  8x8 — far / centre */
-  { 0x05, FLIPPER_TILE_MID, 8 },       /* 16x16 — near / rim  */
+  { SPR_SIZE_1x1, FLIPPER_TILE_FAR, 4 },     /*  8x8 — far / centre */
+  { SPR_SIZE_2x2, FLIPPER_TILE_MID, 8 },     /* 16x16 — near / rim  */
 };
+static const SpriteSizeDef PLAYER_SIZE = { SPR_SIZE_2x2, PLAYER_TILE, 8 };
+static const SpriteSizeDef SHOT_SIZE   = { SPR_SIZE_1x1, SHOT_TILE,   4 };
 
-void load_enemy_sprites_to_vram(void)
+static void dma_tile_words(const u8 * src, u16 tile_base, u16 words)
 {
   u16 const mode2_dma_on  = VDP_REG_MODE2 | VDP_MD_DISPLAY_MODE | VDP_VBLANK_ENABLE
                           | VIDEO_SIGNAL | VDP_DISPLAY_ENABLE | VDP_DMA_ENABLE;
   u16 const mode2_dma_off = mode2_dma_on & ~VDP_DMA_ENABLE;
   vdp_ctrl = VDP_REG_AUTOINC | 2;
-
-  /* 8x8 → tile FLIPPER_TILE_FAR (32 bytes = 16 words) */
-  make_diamond(8, DIAMOND_PAL, g_sprite_gen_buf);
   vdp_ctrl = mode2_dma_on;
-  vdp_dma_transfer((char const *) g_sprite_gen_buf,
-                   to_vdp_addr(FLIPPER_TILE_FAR * 32) | VRAM_W,
-                   16);
-  vdp_ctrl = mode2_dma_off;
-
-  /* 16x16 → FLIPPER_TILE_MID (128 bytes = 64 words) */
-  make_diamond(16, DIAMOND_PAL, g_sprite_gen_buf);
-  vdp_ctrl = mode2_dma_on;
-  vdp_dma_transfer((char const *) g_sprite_gen_buf,
-                   to_vdp_addr(FLIPPER_TILE_MID * 32) | VRAM_W,
-                   64);
+  vdp_dma_transfer((char const *) src,
+                   to_vdp_addr(tile_base * 32) | VRAM_W, words);
   vdp_ctrl = mode2_dma_off;
 }
 
-void render_enemy_sprites(void)
+void load_sprite_tiles_to_vram(void)
+{
+  /* Flipper FAR — 8x8 red filled diamond */
+  make_diamond(8, ENEMY_PAL, g_sprite_gen_buf);
+  dma_tile_words(g_sprite_gen_buf, FLIPPER_TILE_FAR, 16);
+
+  /* Flipper MID — 16x16 red filled diamond */
+  make_diamond(16, ENEMY_PAL, g_sprite_gen_buf);
+  dma_tile_words(g_sprite_gen_buf, FLIPPER_TILE_MID, 64);
+
+  /* Player — 16x16 yellow diamond OUTLINE (matches the web colour) */
+  make_diamond_outline(16, PLAYER_PAL, g_sprite_gen_buf);
+  dma_tile_words(g_sprite_gen_buf, PLAYER_TILE, 64);
+
+  /* Shot — 8x8 white filled diamond */
+  make_diamond(8, SHOT_PAL, g_sprite_gen_buf);
+  dma_tile_words(g_sprite_gen_buf, SHOT_TILE, 16);
+}
+
+static inline void emit_sprite(u16 * buf, u8 idx, const SpriteSizeDef * sz,
+                               s16 px, s16 py)
+{
+  buf[idx * 4 + 0] = (u16) (py + 128 - sz->half);                     /* Y */
+  buf[idx * 4 + 1] = (u16) (((u16) sz->size_byte << 8) | (idx + 1));  /* size + link */
+  buf[idx * 4 + 2] = sz->tile_base;                                   /* tile */
+  buf[idx * 4 + 3] = (u16) (px + 128 - sz->half);                     /* X */
+}
+
+void render_sprites(void)
 {
   static u16 spr_buf[SPR_MAX * 4];
   u8 n = 0;
+
+  /* Pass 1: PLAYER first → sprite 0 = highest priority (drawn on top). */
   for (Entity * e = g_active_head; e; e = e->next) {
-    if (e->type != E_FLIPPER) continue;
-    if (n >= SPR_MAX) break;
+    if (e->type != E_PLAYER || n >= SPR_MAX) continue;
     s16 px = web_pixel_x(e->lane, e->depth_fp);
     s16 py = web_pixel_y(e->lane, e->depth_fp);
-    /* depth_fp split at FP_ONE/2 picks the size band. */
-    u8 size_idx = (e->depth_fp < 0x8000) ? 0 : 1;
-    const SpriteSizeDef * sz = &FLIPPER_SIZES[size_idx];
-    spr_buf[n * 4 + 0] = (u16) (py + 128 - sz->half);                     /* Y */
-    spr_buf[n * 4 + 1] = (u16) (((u16) sz->size_byte << 8) | (n + 1));    /* size + link */
-    spr_buf[n * 4 + 2] = sz->tile_base;                                   /* tile */
-    spr_buf[n * 4 + 3] = (u16) (px + 128 - sz->half);                     /* X */
-    n++;
+    emit_sprite(spr_buf, n++, &PLAYER_SIZE, px, py);
   }
+
+  /* Pass 2: SHOTS. */
+  for (Entity * e = g_active_head; e; e = e->next) {
+    if (e->type != E_SHOT || n >= SPR_MAX) continue;
+    s16 px = web_pixel_x(e->lane, e->depth_fp);
+    s16 py = web_pixel_y(e->lane, e->depth_fp);
+    emit_sprite(spr_buf, n++, &SHOT_SIZE, px, py);
+  }
+
+  /* Pass 3: FLIPPERS, depth-scaled. */
+  for (Entity * e = g_active_head; e; e = e->next) {
+    if (e->type != E_FLIPPER || n >= SPR_MAX) continue;
+    s16 px = web_pixel_x(e->lane, e->depth_fp);
+    s16 py = web_pixel_y(e->lane, e->depth_fp);
+    u8 size_idx = (e->depth_fp < 0x8000) ? 0 : 1;
+    emit_sprite(spr_buf, n++, &FLIPPER_SIZES[size_idx], px, py);
+  }
+
   if (n == 0) {
     /* Sprite 0 hidden off-screen, chain ends immediately. */
     spr_buf[0] = spr_buf[1] = spr_buf[2] = spr_buf[3] = 0;
     n = 1;
   } else {
-    spr_buf[(n - 1) * 4 + 1] &= 0xFF00;
+    spr_buf[(n - 1) * 4 + 1] &= 0xFF00;     /* terminate chain */
   }
   vdp_ctrl_32 = to_vdp_addr(SPR_TABLE_VRAM) | VRAM_W;
   u16 const words = (u16) (n * 4);

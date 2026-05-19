@@ -44,11 +44,13 @@ void web_dma_main_to_vram(void);
 void web_paint_plane_b(void);
 void web_clear_plane_b(void);
 
-/* Generate + DMA enemy sprite tile data to VRAM (once per scene install). */
-void load_enemy_sprites_to_vram(void);
+/* Generate + DMA all sprite tile data (player, shots, enemies) to VRAM.
+ * Called once per scene install. */
+void load_sprite_tiles_to_vram(void);
 
 /* Walk the entity active-list and write the VDP sprite attribute table.
- * Called once per frame; hides sprite 0 when there are no flippers. */
-void render_enemy_sprites(void);
+ * Player + shots + flippers all rendered as hardware sprites.
+ * Player goes first in the chain so it draws on top. */
+void render_sprites(void);
 
 #endif

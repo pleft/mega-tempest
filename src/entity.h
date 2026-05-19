@@ -17,15 +17,12 @@ typedef enum { E_PLAYER = 1, E_SHOT = 2, E_FLIPPER = 3 } EntityType;
 struct Entity {
   u8       type;
   u8       alive;
-  u8       glyph;          // character used to draw at the entity's cell
   u8       lane;           // 0..NUM_LANES-1 — which radial lane
+  u8       phase;          // flipper: 0=descending, 1=rim-walking
   fp16     depth_fp;       // 0 = centre (vanishing point), FP_ONE = rim
   fp16     depth_vel_fp;   // per-tick depth_fp delta (negative = inward)
-  u8       phase;          // flipper: 0=descending, 1=rim-walking
   u8       step_period;    // flipper: frames between rim-walk hops
   u8       lifetime;       // flipper: countdown to next hop
-  u8       _pad;
-  s16      prev_cx, prev_cy;  // last drawn cell (for erase), -1 if never drawn
   Entity * prev;
   Entity * next;
 };

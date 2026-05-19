@@ -189,7 +189,6 @@ static void spawn_shot(u8 lane)
   Entity * e = entity_spawn();
   if (!e) return;
   e->type         = E_SHOT;
-  e->glyph        = 'o';
   e->lane         = lane;
   e->depth_fp     = FP_ONE;
   e->depth_vel_fp = -SHOT_INWARD_STEP;
@@ -201,7 +200,6 @@ static void spawn_flipper(u8 lane)
   Entity * e = entity_spawn();
   if (!e) return;
   e->type         = E_FLIPPER;
-  e->glyph        = 'V';
   e->lane         = lane;
   e->depth_fp     = 0;
   e->depth_vel_fp = +FLIPPER_OUT_STEP;
@@ -254,12 +252,11 @@ static void install_playfield(void)
     web_paint_plane_b();
   }
 
-  load_enemy_sprites_to_vram();
+  load_sprite_tiles_to_vram();
 
   g_player = entity_spawn();
   if (g_player) {
     g_player->type         = E_PLAYER;
-    g_player->glyph        = '^';
     g_player->lane         = g_player_lane;
     g_player->depth_fp     = FP_ONE;
     g_player->depth_vel_fp = 0;
@@ -417,29 +414,8 @@ static void play_main_thread(void)
     plane_putc(32, 27, (char) ('0' + (s % 10)));
   }
 
-  // Render every live entity. Flippers use VDP hardware sprites (see
-  // render_enemy_sprites). Player + shot still draw as plane A text glyphs.
-  for (Entity * e = g_active_head; e; e = e->next) {
-    if (e->type == E_FLIPPER) {
-      /* Clear prev cell if flipper used to be drawn on plane A. */
-      if (e->prev_cx >= 0) {
-        plane_putc((u16) e->prev_cx, (u16) e->prev_cy, ' ');
-        e->prev_cx = -1;
-      }
-      continue;
-    }
-    s16 px = web_pixel_x(e->lane, e->depth_fp);
-    s16 py = web_pixel_y(e->lane, e->depth_fp);
-    s16 cx = px >> 3;
-    s16 cy = py >> 3;
-    if (e->prev_cx >= 0 && (e->prev_cx != cx || e->prev_cy != cy))
-      plane_putc((u16) e->prev_cx, (u16) e->prev_cy, ' ');
-    plane_putc((u16) cx, (u16) cy, (char) e->glyph);
-    e->prev_cx = cx;
-    e->prev_cy = cy;
-  }
-
-  render_enemy_sprites();
+  /* All entities (player, shots, flippers) render via VDP hardware sprites. */
+  render_sprites();
 
   // Lane index display, two digits.
   plane_putc(34, 3, (char) ('0' + (g_player_lane / 10)));

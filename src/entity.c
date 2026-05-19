@@ -9,8 +9,6 @@ void pool_init(void)
 {
   for (u8 i = 0; i < ENTITY_POOL_SIZE; ++i) {
     g_entity_pool[i].alive = 0;
-    g_entity_pool[i].prev_cx = -1;
-    g_entity_pool[i].prev_cy = -1;
     g_entity_pool[i].prev = 0;
     g_entity_pool[i].next = (i + 1 < ENTITY_POOL_SIZE) ? &g_entity_pool[i + 1] : 0;
   }
@@ -26,8 +24,6 @@ Entity * entity_spawn(void)
   g_free_head = e->next;
 
   e->alive = 1;
-  e->prev_cx = -1;
-  e->prev_cy = -1;
   e->prev = 0;
   e->next = g_active_head;
   if (g_active_head) g_active_head->prev = e;
