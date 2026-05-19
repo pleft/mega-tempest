@@ -1,4 +1,5 @@
 #include "web.h"
+#include "sprites.h"
 #include <main/vdp.h>
 #include <main/memmap.h>
 
@@ -25,22 +26,41 @@
 #define WEB_CELLS_H 24
 #define WEB_BUF_BYTES (WEB_CELLS_W * WEB_CELLS_H * 32)   /* 18432 bytes */
 
-#define FLIPPER_TILE_FAR   0x4C0        /* 8x8  = 1 tile, red filled diamond */
-#define FLIPPER_TILE_MID   0x4D0        /* 16x16 = 4 tiles, red filled diamond */
-#define PLAYER_TILE        0x4E0        /* 16x16 = 4 tiles, yellow diamond outline */
-#define SHOT_TILE          0x4F0        /* 8x8 = 1 tile, white filled diamond */
+/* Sprite-tile VRAM slots (data from src/sprites.{c,h}, baked by
+ * tools/extract_mcd_sprites.py from tempest2k-source/src/obj2d.s).
+ * Player is 16 pre-rotated claws (one per lane) packed contiguously so we
+ * can pick by `PLAYER_TILE_BASE + lane * 4`. */
+#define FLIPPER_TILE_FAR    0x4C0       /* 8x8  = 1 tile,  red flipper */
+#define FLIPPER_TILE_MID    0x4D0       /* 16x16 = 4 tiles, red flipper */
+#define PLAYER_TILE_BASE    0x4E0       /* 16 × 4 tiles = 64 tiles, $4E0..$51F */
+#define SHOT_TILE           0x520       /* 8x8 = 1 tile, white shot */
 
-#define ENEMY_PAL          2            /* red — enemy sprites */
-#define PLAYER_PAL         4            /* yellow — player (matches web colour) */
-#define SHOT_PAL           1            /* white — shots */
+#define PLAYER_TILES_PER_LANE 4         /* 2x2 = 4 tiles per claw rotation */
 
 #define SPR_TABLE_VRAM 0xb800
 #define SPR_MAX 32
 
 static u8 g_web_buf[WEB_BUF_BYTES];
-static u8 g_sprite_gen_buf[16 * 16 / 2];   /* big enough for 16x16 */
 static s16 g_lane_rim_x[NUM_LANES];
 static s16 g_lane_rim_y[NUM_LANES];
+
+/* Which of the 16 pre-rotated claws best faces inward from each lane's
+ * rim point. Filled by web_init() per shape — radial shapes (CIRCLE,
+ * OCTAGON, etc.) end up with claw_idx == lane, but non-radial shapes
+ * (FAN, where every lane is on a horizontal line) get a per-lane choice. */
+static u8 g_player_claw_idx[NUM_LANES];
+
+/* Direction each claw "opens toward", as int8 scaled by 64.
+ * Derived from native UP = (0,-1) rotated by -L*π/8 (matches the
+ * extractor's rotation). Used by web_init's dot-product search. */
+static const s8 CLAW_DIR_X[16] = {
+    0, -25, -45, -59, -64, -59, -45, -25,
+    0,  25,  45,  59,  64,  59,  45,  25,
+};
+static const s8 CLAW_DIR_Y[16] = {
+  -64, -59, -45, -25,   0,  25,  45,  59,
+   64,  59,  45,  25,   0, -25, -45, -59,
+};
 
 /* Scale base-radius-60 shape-table coords → render radius 80 (v * 4/3).
  * Uses inline divs.w to avoid pulling __divsi3 from libgcc. */
@@ -139,6 +159,21 @@ void web_init(void)
   for (u8 i = 0; i < NUM_LANES; ++i) {
     g_lane_rim_x[i] = (s16) (WEB_CENTER_X + web_scale(rim[i][0]));
     g_lane_rim_y[i] = (s16) (WEB_CENTER_Y + web_scale(rim[i][1]));
+  }
+
+  /* Pick the claw rotation that best points from each rim toward the centre.
+   * dot-product against all 16 directions, take the max. (Values stay well
+   * within s32 — rim deltas ≤ 80, dir components ≤ 64, sum ≤ ~10240.) */
+  for (u8 i = 0; i < NUM_LANES; ++i) {
+    s16 tx = (s16) (WEB_CENTER_X - g_lane_rim_x[i]);
+    s16 ty = (s16) (WEB_CENTER_Y - g_lane_rim_y[i]);
+    u8 best = 0;
+    s32 best_dot = -0x7FFFFFFFL;
+    for (u8 k = 0; k < 16; ++k) {
+      s32 dot = (s32) tx * CLAW_DIR_X[k] + (s32) ty * CLAW_DIR_Y[k];
+      if (dot > best_dot) { best_dot = dot; best = k; }
+    }
+    g_player_claw_idx[i] = best;
   }
 }
 
@@ -240,62 +275,15 @@ void web_clear_plane_b(void)
   }
 }
 
-// ---- Enemy sprite tile data -----------------------------------------------
+// ---- Sprite tile DMA ------------------------------------------------------
+//
+// Sprite tile data is pre-baked in src/sprites.{c,h} from the Jaguar T2K
+// polygon meshes by tools/extract_mcd_sprites.py. Here we just DMA each
+// blob to its assigned VRAM slot.
 
-/* Plot one pixel (col, row) into an N×N sprite tile buffer at palette `pal`.
- * Column-major tile layout (matches VDP sprite multi-tile order). */
-static void plot_into_tile_buf(u8 N, s16 col, s16 row, u8 pal, u8 * out)
-{
-  if ((u16) col >= N || (u16) row >= N) return;
-  u8 tiles_per_col = (u8) (N / 8);
-  u8 tile_col = (u8) (col / 8);
-  u8 tile_row = (u8) (row / 8);
-  u8 local_col = (u8) (col & 7);
-  u8 local_row = (u8) (row & 7);
-  u16 tile_idx = (u16) ((u16) tile_col * tiles_per_col + tile_row);
-  u16 byte_off = (u16) (tile_idx * 32 + local_row * 4 + local_col / 2);
-  if (local_col & 1)
-    out[byte_off] = (u8) ((out[byte_off] & 0xF0) | (pal & 0x0F));
-  else
-    out[byte_off] = (u8) ((out[byte_off] & 0x0F) | ((pal & 0x0F) << 4));
-}
-
-/* Filled diamond of N×N pixels (N must be a multiple of 8). */
-static void make_diamond(u8 N, u8 pal, u8 * out)
-{
-  u16 total_bytes = (u16) ((u16) N * N / 2);
-  for (u16 i = 0; i < total_bytes; ++i) out[i] = 0;
-
-  u8 center = (u8) (N / 2);
-  for (u8 row = 0; row < N; ++row) {
-    u8 d = (row < center) ? row : (u8) (N - 1 - row);
-    s16 lo = (s16) center - (s16) (d + 1);
-    s16 hi = (s16) center + (s16) d;
-    for (s16 col = lo; col <= hi; ++col)
-      plot_into_tile_buf(N, col, row, pal, out);
-  }
-}
-
-/* Diamond outline (1-pixel border, transparent inside) — for the player so
- * it's clearly distinguishable from the flipper's filled diamond. */
-static void make_diamond_outline(u8 N, u8 pal, u8 * out)
-{
-  u16 total_bytes = (u16) ((u16) N * N / 2);
-  for (u16 i = 0; i < total_bytes; ++i) out[i] = 0;
-
-  u8 center = (u8) (N / 2);
-  for (u8 row = 0; row < N; ++row) {
-    u8 d = (row < center) ? row : (u8) (N - 1 - row);
-    s16 left  = (s16) center - (s16) (d + 1);
-    s16 right = (s16) center + (s16) d;
-    plot_into_tile_buf(N, left,  row, pal, out);
-    plot_into_tile_buf(N, right, row, pal, out);
-  }
-}
-
-/* Sprite size encoding: VDP byte 2, bits 3-2 = V size-1, bits 1-0 = H size-1.
- *   1x1 (8x8):   size_byte=0x00, 1 tile,  16 words
- *   2x2 (16x16): size_byte=0x05, 4 tiles, 64 words
+/* Sprite size byte encoding: bits 3-2 = V size-1, bits 1-0 = H size-1.
+ *   1x1 (8x8):   0x00, 1 tile,  16 words
+ *   2x2 (16x16): 0x05, 4 tiles, 64 words
  * `half` is half the sprite extent in screen pixels, for centring. */
 #define SPR_SIZE_1x1  0x00
 #define SPR_SIZE_2x2  0x05
@@ -304,10 +292,17 @@ static const SpriteSizeDef FLIPPER_SIZES[2] = {
   { SPR_SIZE_1x1, FLIPPER_TILE_FAR, 4 },     /*  8x8 — far / centre */
   { SPR_SIZE_2x2, FLIPPER_TILE_MID, 8 },     /* 16x16 — near / rim  */
 };
-static const SpriteSizeDef PLAYER_SIZE = { SPR_SIZE_2x2, PLAYER_TILE, 8 };
-static const SpriteSizeDef SHOT_SIZE   = { SPR_SIZE_1x1, SHOT_TILE,   4 };
+static const SpriteSizeDef SHOT_SIZE = { SPR_SIZE_1x1, SHOT_TILE, 4 };
+/* PLAYER picks tile_base = PLAYER_TILE_BASE + lane*4 at render time. */
 
-static void dma_tile_words(const u8 * src, u16 tile_base, u16 words)
+static const u8 * const PLAYER_TILES[NUM_LANES] = {
+  SPR_PLAYER_L00, SPR_PLAYER_L01, SPR_PLAYER_L02, SPR_PLAYER_L03,
+  SPR_PLAYER_L04, SPR_PLAYER_L05, SPR_PLAYER_L06, SPR_PLAYER_L07,
+  SPR_PLAYER_L08, SPR_PLAYER_L09, SPR_PLAYER_L10, SPR_PLAYER_L11,
+  SPR_PLAYER_L12, SPR_PLAYER_L13, SPR_PLAYER_L14, SPR_PLAYER_L15,
+};
+
+static void dma_tile_blob(const u8 * src, u16 tile_base, u16 byte_count)
 {
   u16 const mode2_dma_on  = VDP_REG_MODE2 | VDP_MD_DISPLAY_MODE | VDP_VBLANK_ENABLE
                           | VIDEO_SIGNAL | VDP_DISPLAY_ENABLE | VDP_DMA_ENABLE;
@@ -315,27 +310,22 @@ static void dma_tile_words(const u8 * src, u16 tile_base, u16 words)
   vdp_ctrl = VDP_REG_AUTOINC | 2;
   vdp_ctrl = mode2_dma_on;
   vdp_dma_transfer((char const *) src,
-                   to_vdp_addr(tile_base * 32) | VRAM_W, words);
+                   to_vdp_addr(tile_base * 32) | VRAM_W,
+                   (u16) (byte_count / 2));
   vdp_ctrl = mode2_dma_off;
 }
 
 void load_sprite_tiles_to_vram(void)
 {
-  /* Flipper FAR — 8x8 red filled diamond */
-  make_diamond(8, ENEMY_PAL, g_sprite_gen_buf);
-  dma_tile_words(g_sprite_gen_buf, FLIPPER_TILE_FAR, 16);
-
-  /* Flipper MID — 16x16 red filled diamond */
-  make_diamond(16, ENEMY_PAL, g_sprite_gen_buf);
-  dma_tile_words(g_sprite_gen_buf, FLIPPER_TILE_MID, 64);
-
-  /* Player — 16x16 yellow diamond OUTLINE (matches the web colour) */
-  make_diamond_outline(16, PLAYER_PAL, g_sprite_gen_buf);
-  dma_tile_words(g_sprite_gen_buf, PLAYER_TILE, 64);
-
-  /* Shot — 8x8 white filled diamond */
-  make_diamond(8, SHOT_PAL, g_sprite_gen_buf);
-  dma_tile_words(g_sprite_gen_buf, SHOT_TILE, 16);
+  dma_tile_blob(SPR_FLIPPER_S, FLIPPER_TILE_FAR, sizeof SPR_FLIPPER_S);
+  dma_tile_blob(SPR_FLIPPER_M, FLIPPER_TILE_MID, sizeof SPR_FLIPPER_M);
+  dma_tile_blob(SPR_SHOT,      SHOT_TILE,        sizeof SPR_SHOT);
+  /* All 16 player claws packed contiguously starting at PLAYER_TILE_BASE. */
+  for (u8 i = 0; i < NUM_LANES; ++i) {
+    dma_tile_blob(PLAYER_TILES[i],
+                  (u16) (PLAYER_TILE_BASE + i * PLAYER_TILES_PER_LANE),
+                  sizeof SPR_PLAYER_L00);
+  }
 }
 
 static inline void emit_sprite(u16 * buf, u8 idx, const SpriteSizeDef * sz,
@@ -352,12 +342,19 @@ void render_sprites(void)
   static u16 spr_buf[SPR_MAX * 4];
   u8 n = 0;
 
-  /* Pass 1: PLAYER first → sprite 0 = highest priority (drawn on top). */
+  /* Pass 1: PLAYER first → sprite 0 = highest priority (drawn on top).
+   * Claw rotation is picked per-shape in web_init (g_player_claw_idx)
+   * so the open end always faces the centre, even on FAN where lanes
+   * don't sit on a circle. */
   for (Entity * e = g_active_head; e; e = e->next) {
     if (e->type != E_PLAYER || n >= SPR_MAX) continue;
     s16 px = web_pixel_x(e->lane, e->depth_fp);
     s16 py = web_pixel_y(e->lane, e->depth_fp);
-    emit_sprite(spr_buf, n++, &PLAYER_SIZE, px, py);
+    u8 claw = g_player_claw_idx[e->lane];
+    SpriteSizeDef sz = { SPR_SIZE_2x2,
+                         (u16) (PLAYER_TILE_BASE + claw * PLAYER_TILES_PER_LANE),
+                         8 };
+    emit_sprite(spr_buf, n++, &sz, px, py);
   }
 
   /* Pass 2: SHOTS. */

@@ -36,5 +36,6 @@ $(PROJECT_ID).cart: \
 	entity.c \
 	mcd.c \
 	web.c \
+	sprites.c \
 	mulsi3.s \
 	res.s
