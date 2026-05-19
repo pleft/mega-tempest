@@ -118,69 +118,72 @@ static inline s16 web_scale(s8 v)
  * count per shape varies (11..17, matching T2K) — see WEB_LANE_COUNT and
  * WEB_CLOSED below. Closed shapes wrap lane N-1 → 0; open ones clamp. */
 
-static const s8 WEB_RIM_CIRCLE[16][2] = {
-  {   0,  60 }, {  23,  55 }, {  42,  42 }, {  55,  23 },
-  {  60,   0 }, {  55, -23 }, {  42, -42 }, {  23, -55 },
-  {   0, -60 }, { -23, -55 }, { -42, -42 }, { -55, -23 },
-  { -60,   0 }, { -55,  23 }, { -42,  42 }, { -23,  55 },
+/* V / U-bowl — T2K web2 ("v"), 16 closed vertices.
+ * Bounding box (1..17, 1..15), centre (9, 8), scale 7 (max abs 8). */
+static const s8 WEB_RIM_V[16][2] = {
+  { -56, -49 }, { -49, -35 }, { -42, -21 }, { -35,  -7 },
+  { -28,   7 }, { -21,  21 }, { -14,  35 }, {  -7,  49 },
+  {   7,  49 }, {  14,  35 }, {  21,  21 }, {  28,   7 },
+  {  35,  -7 }, {  42, -21 }, {  49, -35 }, {  56, -49 },
 };
 
+/* Square — T2K web11, 16 closed vertices.
+ * Bounding box (4..12, 4..12), centre (8, 8), scale 15 (max abs 4). */
 static const s8 WEB_RIM_SQUARE[16][2] = {
-  {   0,  60 }, {  25,  60 }, {  60,  60 }, {  60,  25 },
-  {  60,   0 }, {  60, -25 }, {  60, -60 }, {  25, -60 },
-  {   0, -60 }, { -25, -60 }, { -60, -60 }, { -60, -25 },
-  { -60,   0 }, { -60,  25 }, { -60,  60 }, { -25,  60 },
+  { -60, -60 }, { -60, -30 }, { -60,   0 }, { -60,  30 },
+  { -60,  60 }, { -30,  60 }, {   0,  60 }, {  30,  60 },
+  {  60,  60 }, {  60,  30 }, {  60,   0 }, {  60, -30 },
+  {  60, -60 }, {  30, -60 }, {   0, -60 }, { -30, -60 },
 };
 
-/* PLUS / cross — rectangular cross with 16 vertices tracing the outline:
- * 4 arm-tip centres + 8 arm-tip side corners + 4 inner corners between
- * arms. Arm half-width is 20 (out of 60 max), giving arms ~2/3 as long
- * as they are wide. Each arm has 4 lanes around it (2 along the tip,
- * 2 along the sides) so the player walks the perimeter recognisably. */
+/* Plus / Cross — T2K web10, 16 closed vertices.
+ * Bounding box (3..13, 3..13), centre (8, 8), scale 12 (max abs 5). */
 static const s8 WEB_RIM_PLUS[16][2] = {
-  {   0,  60 }, {  20,  60 }, {  20,  20 }, {  60,  20 },
-  {  60,   0 }, {  60, -20 }, {  20, -20 }, {  20, -60 },
-  {   0, -60 }, { -20, -60 }, { -20, -20 }, { -60, -20 },
-  { -60,   0 }, { -60,  20 }, { -20,  20 }, { -20,  60 },
+  { -12, -60 }, { -12, -36 }, { -36, -12 }, { -60, -12 },
+  { -60,  12 }, { -36,  12 }, { -12,  36 }, { -12,  60 },
+  {  12,  60 }, {  12,  36 }, {  36,  12 }, {  60,  12 },
+  {  60, -12 }, {  36, -12 }, {  12, -36 }, {  12, -60 },
 };
 
-/* Diamond — like square but rotated 45°. */
-static const s8 WEB_RIM_DIAMOND[16][2] = {
-  {   0,  60 }, {  15,  45 }, {  30,  30 }, {  45,  15 },
-  {  60,   0 }, {  45, -15 }, {  30, -30 }, {  15, -45 },
-  {   0, -60 }, { -15, -45 }, { -30, -30 }, { -45, -15 },
-  { -60,   0 }, { -45,  15 }, { -30,  30 }, { -15,  45 },
+/* Triangle — T2K web9, 18 closed vertices.
+ * Bounding box (2..14, 1..13), centre (8, 7), scale 10 (max abs 6). */
+static const s8 WEB_RIM_TRIANGLE[18][2] = {
+  {   0, -60 }, { -10, -40 }, { -20, -20 }, { -30,   0 },
+  { -40,  20 }, { -50,  40 }, { -60,  60 }, { -40,  60 },
+  { -20,  60 }, {   0,  60 }, {  20,  60 }, {  40,  60 },
+  {  60,  60 }, {  50,  40 }, {  40,  20 }, {  30,   0 },
+  {  20, -20 }, {  10, -40 },
 };
 
-/* Triangle — equilateral, pointing up. */
-static const s8 WEB_RIM_TRIANGLE[16][2] = {
-  {   0,  30 }, {  13,  30 }, {  26,  30 }, {  39,  30 },
-  {  52,  30 }, {  39,   7 }, {  26, -15 }, {  13, -37 },
-  {   0, -60 }, { -13, -37 }, { -26, -15 }, { -39,   7 },
-  { -52,  30 }, { -39,  30 }, { -26,  30 }, { -13,  30 },
+/* Pentagon — T2K web27, 15 closed vertices.
+ * Bounding box (2..14, 2..14), centre (8, 8), scale 10 (max abs 6). */
+static const s8 WEB_RIM_PENTAGON[15][2] = {
+  {   0, -60 }, { -20, -40 }, { -40, -20 }, { -60,   0 },
+  { -50,  20 }, { -40,  40 }, { -30,  60 }, { -10,  60 },
+  {  10,  60 }, {  30,  60 }, {  40,  40 }, {  50,  20 },
+  {  60,   0 }, {  40, -20 }, {  20, -40 },
 };
 
-/* Octagon — even lanes = vertices, odd lanes = midpoints. */
-static const s8 WEB_RIM_OCTAGON[16][2] = {
-  {   0,  60 }, {  21,  51 }, {  42,  42 }, {  51,  21 },
-  {  60,   0 }, {  51, -21 }, {  42, -42 }, {  21, -51 },
-  {   0, -60 }, { -21, -51 }, { -42, -42 }, { -51, -21 },
-  { -60,   0 }, { -51,  21 }, { -42,  42 }, { -21,  51 },
-};
-
-/* Star — extracted from T2K's web22 ("tiny star", 12 lanes closed).
- * 6-pointed (alternating point/valley) instead of our previous 8-pointed.
- * Bounding box (3..13, 3..13), centred (8, 8) and scaled by 12 so max
- * coord = 60. */
+/* Star — T2K web22 ("tiny star"), 12 closed vertices.
+ * Bounding box (3..13, 3..13), centre (8, 8), scale 12 (max abs 5). */
 static const s8 WEB_RIM_STAR[12][2] = {
   { -12, -36 }, { -36, -12 }, { -60,   0 }, { -36,  12 },
   { -12,  36 }, {   0,  60 }, {  12,  36 }, {  36,  12 },
   {  60,   0 }, {  36, -12 }, {  12, -36 }, {   0, -60 },
 };
 
-/* Fan / Flat plane — extracted from T2K's web1 (open, 12 vertices = 11 lanes).
- * Horizontal line at the bottom of the playfield; the player walks
- * left-right along it without wrap. */
+/* W — T2K web12, 15 open vertices = 14 lanes.
+ * Inverted-W outline (3 upper peaks, 2 lower valleys).
+ * Bounding box (-3..19, 8..16), centre (8, 12), scale 5 (max abs 11). */
+static const s8 WEB_RIM_W[15][2] = {
+  { -55, -20 }, { -45, -10 }, { -35,   0 }, { -25,  10 },
+  { -15,  20 }, { -10,  10 }, {  -5,   0 }, {   0, -10 },
+  {   5,   0 }, {  10,  10 }, {  15,  20 }, {  25,  10 },
+  {  35,   0 }, {  45, -10 }, {  55, -20 },
+};
+
+/* Fan / Flat plane — T2K web1, 12 open vertices = 11 lanes.
+ * Horizontal line, player walks L↔R along it without wrap. */
 static const s8 WEB_RIM_FAN[12][2] = {
   { -55,  40 }, { -45,  40 }, { -35,  40 }, { -25,  40 },
   { -15,  40 }, {  -5,  40 }, {   5,  40 }, {  15,  40 },
@@ -188,33 +191,34 @@ static const s8 WEB_RIM_FAN[12][2] = {
 };
 
 const char * const WEB_SHAPE_NAMES[WEB_SHAPE_COUNT] = {
-  "CIRCLE  ", "SQUARE  ", "PLUS    ", "DIAMOND ",
-  "TRIANGLE", "OCTAGON ", "STAR    ", "FAN     ",
+  "V       ", "SQUARE  ", "PLUS    ", "TRIANGLE",
+  "PENTAGON", "STAR    ", "W       ", "FAN     ",
 };
 
 static const s8 (* const WEB_RIMS[WEB_SHAPE_COUNT])[2] = {
-  WEB_RIM_CIRCLE, WEB_RIM_SQUARE,  WEB_RIM_PLUS,    WEB_RIM_DIAMOND,
-  WEB_RIM_TRIANGLE, WEB_RIM_OCTAGON, WEB_RIM_STAR,  WEB_RIM_FAN,
+  WEB_RIM_V,        WEB_RIM_SQUARE,   WEB_RIM_PLUS, WEB_RIM_TRIANGLE,
+  WEB_RIM_PENTAGON, WEB_RIM_STAR,     WEB_RIM_W,    WEB_RIM_FAN,
 };
 
-/* Per-shape lane count + closed flag (1 = wraps lane N-1→0; 0 = clamps).
- * Each WEB_RIMS[i] must have exactly WEB_LANE_COUNT[i] entries. */
+/* Vertex count + closed flag per shape. Each WEB_RIMS[i] must have
+ * exactly WEB_LANE_COUNT[i] entries; for closed shapes that's also the
+ * lane count, for open shapes the lane count is one less. */
 static const u8 WEB_LANE_COUNT[WEB_SHAPE_COUNT] = {
-  16,   /* CIRCLE   */
-  16,   /* SQUARE   */
-  16,   /* PLUS     */
-  16,   /* DIAMOND  */
-  16,   /* TRIANGLE */
-  16,   /* OCTAGON  */
-  12,   /* STAR     — T2K's 12-vertex tiny-star */
-  12,   /* FAN      — T2K's 12-vertex flat plane (open) */
+  16,   /* V        — web2  */
+  16,   /* SQUARE   — web11 */
+  16,   /* PLUS     — web10 */
+  18,   /* TRIANGLE — web9  */
+  15,   /* PENTAGON — web27 */
+  12,   /* STAR     — web22 */
+  15,   /* W        — web12 (15 verts → 14 lanes when open) */
+  12,   /* FAN      — web1  (12 verts → 11 lanes when open) */
 };
 static const u8 WEB_CLOSED[WEB_SHAPE_COUNT] = {
-  1, 1, 1, 1, 1, 1, 1,
-  0,   /* FAN is the only open shape — player walks the line, no wrap. */
+  1, 1, 1, 1, 1, 1,
+  0, 0,   /* W and FAN are open — player walks the line, no wrap. */
 };
 
-u8 g_web_shape = WEB_SHAPE_CIRCLE;
+u8 g_web_shape = WEB_SHAPE_V;
 
 // ---- Lane projection ------------------------------------------------------
 

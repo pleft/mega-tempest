@@ -11,11 +11,10 @@
 #include "entity.h"
 
 /* MAX_LANES is the upper bound for storage; the actual number of lanes
- * per web shape comes from its own definition (T2K webs range from 7 to
- * 17 lanes). NUM_LANES is kept as a legacy alias for code that still
- * assumes 16. */
-#define MAX_LANES      17
-#define NUM_LANES      16
+ * per web shape comes from its own definition. T2K's triangle (web9)
+ * has 18 vertices so MAX_LANES must be at least 18. */
+#define MAX_LANES      18
+#define NUM_LANES      16          /* legacy alias for code still hard-coded */
 #define WEB_CENTER_X  160
 #define WEB_CENTER_Y  112
 
@@ -25,15 +24,19 @@ u8 web_lane_count(void);
 u8 web_lane_left(u8 current);
 u8 web_lane_right(u8 current);
 
+/* 8 web shapes, all extracted from Tempest 2000's yak.s. Each maps to
+ * a specific T2K web by polygon + lane count. Slot order is whatever
+ * felt like a sensible "simple → exotic" progression for cycling on
+ * the title screen. */
 typedef enum {
-  WEB_SHAPE_CIRCLE = 0,
-  WEB_SHAPE_SQUARE,
-  WEB_SHAPE_PLUS,
-  WEB_SHAPE_DIAMOND,
-  WEB_SHAPE_TRIANGLE,
-  WEB_SHAPE_OCTAGON,
-  WEB_SHAPE_STAR,
-  WEB_SHAPE_FAN,
+  WEB_SHAPE_V        = 0,    /* T2K web2  — V/U-bowl, 16 closed lanes  */
+  WEB_SHAPE_SQUARE,          /* T2K web11 — square, 16 closed lanes    */
+  WEB_SHAPE_PLUS,            /* T2K web10 — cross, 16 closed lanes     */
+  WEB_SHAPE_TRIANGLE,        /* T2K web9  — triangle, 18 closed lanes  */
+  WEB_SHAPE_PENTAGON,        /* T2K web27 — pentagon, 15 closed lanes  */
+  WEB_SHAPE_STAR,            /* T2K web22 — 6-point star, 12 closed    */
+  WEB_SHAPE_W,               /* T2K web12 — W, 14 open lanes           */
+  WEB_SHAPE_FAN,             /* T2K web1  — flat plane, 11 open lanes  */
   WEB_SHAPE_COUNT,
 } WebShape;
 
