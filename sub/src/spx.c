@@ -496,57 +496,70 @@ static void render_rot(void)
 
 // ---- SFX playback (RF5C164 channel 4; MOD claims 0-3) -------------------
 //
-// Phase 1: FIRE only. The sample blob is embedded in sfx_data.{c,h} and
-// already in RF5C164 sign-magnitude with a trailing $FF end-marker.
-// First play of each SFX uploads its blob to a fixed PCM RAM bank (then
-// the upload flag stays set for the rest of the session). Subsequent
-// plays just retrigger the channel.
+// All three SFX (FIRE / HIT / DEATH) live in one shared slot at PCM RAM
+// offset $6000 (bank 6) — sized big enough for the largest (DEATH at
+// ~22 KB). Each play uploads the chosen sample, configures the channel,
+// triggers. Upload cost ranges from ~1 ms (fire) to ~17 ms (death).
 //
-// PCM RAM offset $B000 (bank 11) — sits high in the static-sample
-// region claimed by InitMOD ($0000-$BFFF). If rave4.mod's static samples
-// reach that bank we'll hear them clobbered; in practice they don't.
+// PCM RAM layout assumption: MOD's static-sample region stays below
+// $6000. For rave4.mod with the player's halving-to-fit logic this
+// holds; verify empirically if you switch MODs.
+//
+// See feedback_rf5c164_sfx_gotchas.md for the 5 traps each line guards.
 
 #define SFX_CHANNEL    4
-#define SFX_BANK_FIRE  0xB0          /* PCM offset $B000 */
+/* $6000-$BFFF (24 KB) is reserved for our shared SFX slot by lowering
+ * MOD's RESIDENT_BUDGET in module.c. DEATH (22 KB) is the largest
+ * sample and just fits in this slot. */
+#define SFX_BANK       0x60          /* PCM offset $6000 */
 
-#define PCM_PAN_REG    (*((volatile uint8_t *) 0xFF0003))
-
-/* No more lazy-upload flag — megadev sub doesn't zero .bss, so an
- * uninit static flag was randomly non-zero on boot, skipping the
- * upload and leaving loop pointers / channel state pointing at MOD's
- * voice samples (we heard "Play" looping forever). Just upload every
- * play — 257 bytes via pcm_cpy is microseconds. */
+/* Table mapping SFX index → (data, length). Order must match SFX_IDX_*
+ * constants in sfx_data.h (0=FIRE, 1=HIT, 2=DEATH). */
+typedef struct { const uint8_t * data; uint16_t len; } sfx_entry_t;
+static const sfx_entry_t SFX_TABLE[3] = {
+  { SFX_FIRE,  sizeof SFX_FIRE  },
+  { SFX_HIT,   sizeof SFX_HIT   },
+  { SFX_DEATH, sizeof SFX_DEATH },
+};
 
 static void sfx_play(uint8_t idx)
 {
-  if (idx != SFX_IDX_FIRE) return;          /* phase 1: FIRE only */
+  if (idx >= 3) return;
+  const sfx_entry_t * e = &SFX_TABLE[idx];
 
-  /* Upload the real T2K "Player Shot Normal" sample. SFX_FIRE was baked
-   * by tools/extract_mcd_sprites.py into sign-magnitude with a trailing
-   * $FF byte already in place. */
-  uint16_t base = (uint16_t) (SFX_BANK_FIRE << 8);
-  pcm_cpy(base, (void *) SFX_FIRE, (uint16_t) sizeof SFX_FIRE, 0);
-  uint16_t loop_off = (uint16_t) (base + sizeof SFX_FIRE - 1);
-
-  /* Mask interrupts during channel config so mod_tick (50 Hz timer) can't
-   * stomp PCM_CTRL between our register writes and send them to a wrong
-   * channel. Without this masking, mid-config interruption would silently
-   * misroute everything to whichever channel mod_tick was last servicing. */
+  /* MASK INTERRUPTS for the entire sfx_play. mod_tick (50 Hz timer)
+   * stomps PCM_CTRL when it fires — if that happens mid-pcm_cpy, the
+   * rest of the upload bytes go to whatever channel mod_tick selected
+   * instead of into our shared SFX slot. Symptom is "echo" — chip plays
+   * the truncated upload, then on wrap reads bytes that were misrouted
+   * into other PCM RAM regions. Cost is ~17 ms of held IRQs for the
+   * biggest sample (DEATH) — MOD music drops one or two ticks but
+   * recovers immediately. */
   asm volatile("move.w #0x2700, %sr");
 
-  pcm_set_ctrl((uint8_t) (0xC0 | SFX_CHANNEL));           /* chip on + select ch */
   pcm_set_off(SFX_CHANNEL);
-  pcm_set_start(SFX_BANK_FIRE, 0);
-  /* Loop-start = the $FF terminator byte. After end-of-sample the chip
-   * wraps there and immediately re-reads $FF → effectively one-shot. */
-  pcm_set_loop(loop_off);
-  pcm_set_env(0xFF);                                       /* max volume */
-  /* PAN register layout: high nibble = L, low nibble = R. 0x88 = balanced
-   * mid (both ~50%). pcm_set_pan goes through pcm_lcf which mangles the
-   * value oddly for raw "max both"; writing the register directly. */
-  *((volatile uint8_t *) 0xFF0003) = 0xFF;                /* L=F, R=F (centre, loud) */
+
+  /* Upload the selected sample into the shared slot. Blobs are already
+   * sign-magnitude with a 32-byte $FF tail (see tools/extract_sfx.py),
+   * so conv=0 is correct.
+   *
+   * loop_off = LAST SAMPLE BYTE (one before the first $FF) — matches
+   * module.c's update_channels convention for non-looping MOD samples.
+   * On end-of-sample the chip wraps there and plays a tight 1-byte
+   * loop on that byte; since T2K SFX samples end at zero amplitude,
+   * that's silent. Pointing AT the $FF (which I tried first) doesn't
+   * stop the chip on this chip — gives audible echoes. */
+  uint16_t base = (uint16_t) (SFX_BANK << 8);
+  pcm_cpy(base, (void *) e->data, e->len, 0);
+  uint16_t loop_off = (uint16_t) (base + e->len - 32 - 1);
+
+  pcm_set_ctrl((uint8_t) (0xC0 | SFX_CHANNEL));     /* chip on + select ch */
+  pcm_set_start(SFX_BANK, 0);
+  pcm_set_loop(loop_off);                           /* one-shot via $FF wrap */
+  pcm_set_env(0xFF);                                 /* max volume */
+  *((volatile uint8_t *) 0xFF0003) = 0xFF;          /* L=F, R=F (centre loud) */
   pcm_delay();
-  pcm_set_period(428);                                     /* Amiga C-2 ≈ 8363 Hz */
+  pcm_set_period(428);                               /* Amiga C-2 ≈ 8363 Hz */
   pcm_set_on(SFX_CHANNEL);
 
   asm volatile("move.w #0x2000, %sr");

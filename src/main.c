@@ -349,7 +349,8 @@ static void play_gated_vblank(void)
             entity_kill(s);
             kill_flipper(f);
             g_score++;
-            sfx_hit();
+            if (g_mcd_present) mcd_play_sfx(1);    /* 1 = HIT — PCM */
+            else               sfx_hit();           /* PSG fallback */
             break;
           }
         }
@@ -368,7 +369,8 @@ static void play_gated_vblank(void)
         g_player_lane = 0;
         g_player->lane = 0;
         kill_flipper(f);
-        sfx_death();
+        if (g_mcd_present) mcd_play_sfx(2);    /* 2 = DEATH — PCM */
+        else               sfx_death();         /* PSG fallback */
         break;
       }
       f = f_next;

@@ -69,9 +69,13 @@ def main():
     for name, fn, wrapped in SFX:
         raw = (JAG_SRC / fn).read_bytes()
         pcm = strip_8svx(raw) if wrapped else raw
-        conv = to_sign_magnitude(pcm) + b'\xff'   # append RF5C164 end marker
+        # Append 32 $FF bytes — matching pcm.c's loop_markers[] convention.
+        # The chip advances past a single $FF before fully halting playback,
+        # which lets it skid into stale data behind the sample and produce
+        # an "echo". 32 markers keep it firmly in terminator mode.
+        conv = to_sign_magnitude(pcm) + b'\xff' * 32
         blobs.append((name, conv))
-        print(f"  {name:6s} ← samples/{fn} ({len(pcm)} PCM bytes → {len(conv)} including $FF terminator)")
+        print(f"  {name:6s} ← samples/{fn} ({len(pcm)} PCM bytes → {len(conv)} including 32-byte $FF tail)")
 
     # Header
     lines_h = [

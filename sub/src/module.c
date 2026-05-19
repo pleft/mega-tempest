@@ -441,7 +441,11 @@ uint8_t InitMOD(CDFileHandle_t *File_p, Mod_t* Mod_p, uint8_t filter)
    * 16 KB ring budget is paid. */
   mod_stream_reset_all();
   {
-    const uint32_t RESIDENT_BUDGET = MOD_PCM_RAM - 0x4000;   /* 48 KB */
+    /* Resident budget shrunk from 48 KB to 24 KB to make room for the
+     * 24 KB SFX slot at $6000-$BFFF (see megacd-port spx.c SFX_BANK).
+     * Side effect: rave4.mod will halve its larger static samples more
+     * aggressively if they don't fit — slight loss of fidelity. */
+    const uint32_t RESIDENT_BUDGET = MOD_PCM_RAM - 0xA000;   /* 24 KB */
     /* Reset all SampleHandle to a non-streamed sentinel for safety. */
     while (1) {
       /* Compute current resident total (samples NOT yet marked streamed). */
@@ -479,7 +483,7 @@ uint8_t InitMOD(CDFileHandle_t *File_p, Mod_t* Mod_p, uint8_t filter)
   Ix = Iz = 0;
   do
   {
-    if (Iz > (MOD_PCM_RAM - 0x4000))
+    if (Iz > (MOD_PCM_RAM - 0xA000))
     {
       Iy = 0xFFFFFFFF;
       Iz = 0;
@@ -506,7 +510,7 @@ uint8_t InitMOD(CDFileHandle_t *File_p, Mod_t* Mod_p, uint8_t filter)
       if (g_sample_is_streamed[Sample]) continue;
       Iz += ((Mod_p->Inst[ Sample ].SampleLength >> Mod_p->Inst[ Sample ].Factor) + 32 + 255) & ~255;
     }
-  } while (Iz > (MOD_PCM_RAM - 0x4000));
+  } while (Iz > (MOD_PCM_RAM - 0xA000));
 
   DBG(0x58);
   /* upload samples to sound ram */

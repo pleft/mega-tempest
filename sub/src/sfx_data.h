@@ -7,9 +7,9 @@
 
 #include <stdint.h>
 
-extern const uint8_t SFX_FIRE[1857];
-extern const uint8_t SFX_HIT[10935];
-extern const uint8_t SFX_DEATH[21659];
+extern const uint8_t SFX_FIRE[1888];
+extern const uint8_t SFX_HIT[10966];
+extern const uint8_t SFX_DEATH[21690];
 
 #define SFX_IDX_FIRE  0
 #define SFX_IDX_HIT  1
