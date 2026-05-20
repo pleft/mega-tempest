@@ -21,6 +21,12 @@ void mcd_play_sfx(u8 idx);                          /* idx = 0 FIRE / 1 HIT / 2 
 void mcd_render_asic(u16 tile_base, u8 plane_x, u8 plane_y, u8 warp);
 /* Copy the demo Sega-character stamps + stamp map to WR. */
 void mcd_asic_load_stamps(void);
+
+/* Generate a Tempest-styled 32x32 stamp (yellow lane outline + blue
+ * lane-gradient fill) directly into WR. Fills the stamp map with that
+ * single stamp repeating. Uses the game's CRAM indices so the output
+ * looks right in the playfield palette. */
+void mcd_asic_load_tempest_test_stamp(void);
 void mcd_wait_ack(u16 expected);
 
 #endif

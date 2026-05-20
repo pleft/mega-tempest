@@ -125,6 +125,110 @@ void mcd_asic_load_stamps(void)
   copy_words(res_stamp_map.data, (volatile u16 *) WR_STAMP_MAP, res_stamp_map.size);
 }
 
+/* Build a Tempest-styled 32x32 "web cell" stamp directly in WR.
+ * Layout: black inside, blue gradient band along outer edges (palette
+ * 5..8 darkest→brightest), yellow (4) corner/centre marks. Designed so
+ * tiling produces lane-like patterns matching the game's web palette.
+ *
+ * Stored in stamp slot 1 (WR + $200) in the NON-STANDARD byte-pair
+ * layout [b2,b3,b0,b1] per row, because the ASIC engine reads stamps in
+ * that same format and the IMG output also uses that format. Storing
+ * the source in matched format means the round-trip stamp→IMG→repack
+ * produces the original pixel order. */
+static void write_tempest_stamp(volatile u8 * dst32x32_512)
+{
+  /* Generate per-pixel palette indices for a 32x32 stamp. */
+  static u8 px[32][32];
+  for (u8 y = 0; y < 32; ++y) {
+    for (u8 x = 0; x < 32; ++x) {
+      u8 c;
+      u8 dx = (x < 16) ? x : (31 - x);
+      u8 dy = (y < 16) ? y : (31 - y);
+      u8 d  = dx < dy ? dx : dy;     /* distance to nearest edge */
+      if      (d == 0) c = 4;        /* outermost rim — yellow */
+      else if (d == 1) c = 8;        /* brightest blue */
+      else if (d == 2) c = 7;        /* medium blue */
+      else if (d == 3) c = 6;        /* dark blue */
+      else if (d <= 5) c = 5;        /* darkest navy */
+      else             c = 0;        /* interior — black */
+      if ((x == 15 || x == 16) && (y == 15 || y == 16)) c = 4;
+      px[y][x] = c;
+    }
+  }
+
+  /* Walk 4x4 grid of VDP tiles, col-major (tile 0 = top-left, tile 1 =
+   * below it, tile 4 = next column over). Bytes written in STANDARD VDP
+   * order [b0,b1,b2,b3] = left-to-right pixel pairs. Sega's stamp format
+   * empirically appears to be standard; only the IMG buffer output has
+   * the byte-pair swap quirk that we fix on display. */
+  for (u8 vc = 0; vc < 4; ++vc) {
+    for (u8 vr = 0; vr < 4; ++vr) {
+      volatile u8 * tile = dst32x32_512 + (vc * 4 + vr) * 32;
+      for (u8 r = 0; r < 8; ++r) {
+        u8 y = vr * 8 + r;
+        u8 x = vc * 8;
+        tile[r*4 + 0] = (u8) ((px[y][x  ] << 4) | px[y][x+1]);
+        tile[r*4 + 1] = (u8) ((px[y][x+2] << 4) | px[y][x+3]);
+        tile[r*4 + 2] = (u8) ((px[y][x+4] << 4) | px[y][x+5]);
+        tile[r*4 + 3] = (u8) ((px[y][x+6] << 4) | px[y][x+7]);
+      }
+    }
+  }
+}
+
+void mcd_asic_load_tempest_test_stamp(void)
+{
+  wait_2m_main_to(0x80000);
+
+  /* Build a Tempest-styled stamp programmatically into main RAM, then
+   * copy_words into WR slot 1 ($200). Stamp-map entry value = stamp
+   * data offset / 0x80 — for 32x32 stamps this means the stamp at
+   * offset N*0x200 needs map entries of value N*4. Stamp at $200 → 4. */
+  static u16 stamp_buf[256];
+
+  /* Generate per-pixel palette indices for a 32x32 stamp. */
+  static u8 px[32][32];
+  for (u8 y = 0; y < 32; ++y) {
+    for (u8 x = 0; x < 32; ++x) {
+      u8 c;
+      u8 dx = (x < 16) ? x : (31 - x);
+      u8 dy = (y < 16) ? y : (31 - y);
+      u8 d  = dx < dy ? dx : dy;     /* distance to nearest edge */
+      if      (d == 0) c = 4;        /* outermost rim — yellow */
+      else if (d == 1) c = 8;        /* brightest blue */
+      else if (d == 2) c = 7;        /* medium blue */
+      else if (d == 3) c = 6;        /* dark blue */
+      else if (d <= 5) c = 5;        /* darkest navy */
+      else             c = 0;        /* interior — black */
+      if ((x == 15 || x == 16) && (y == 15 || y == 16)) c = 4;
+      px[y][x] = c;
+    }
+  }
+
+  /* Pack into 16 VDP tiles col-major. Standard byte order [b0,b1,b2,b3]
+   * (left-to-right pixel pairs). */
+  for (u8 vc = 0; vc < 4; ++vc) {
+    for (u8 vr = 0; vr < 4; ++vr) {
+      u16 * tile_w = stamp_buf + (vc * 4 + vr) * 16;
+      for (u8 r = 0; r < 8; ++r) {
+        u8 y = vr * 8 + r;
+        u8 x = vc * 8;
+        tile_w[r*2 + 0] = (u16) (((px[y][x  ] << 12) | (px[y][x+1] << 8)
+                                | (px[y][x+2] <<  4) |  px[y][x+3]));
+        tile_w[r*2 + 1] = (u16) (((px[y][x+4] << 12) | (px[y][x+5] << 8)
+                                | (px[y][x+6] <<  4) |  px[y][x+7]));
+      }
+    }
+  }
+
+  copy_words((const char *) stamp_buf, (volatile u16 *) (WR_MAIN + 0x00200), 512);
+
+  /* Stamp map: all entries reference stamp at offset $200 (index 4). */
+  static u16 map_buf[256];
+  for (u16 i = 0; i < 256; ++i) map_buf[i] = 0x0004;
+  copy_words((const char *) map_buf, (volatile u16 *) WR_STAMP_MAP, 512);
+}
+
 /* Repack the 128x128 IMG buffer (256 tiles, 8 KB) from non-standard
  * [b2,b3,b0,b1] byte-pair layout to standard VDP tile format. Source:
  * IMG buffer in WR. Dest: scratch in WR. Both stay in Word RAM since

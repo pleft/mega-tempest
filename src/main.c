@@ -438,6 +438,13 @@ static void play_main_thread(void)
     mcd_asic_load_stamps();
     mcd_render_asic(0x280, 12, 6, 1);
   }
+  /* UP: render a Tempest-styled web-cell stamp tiled across the IMG
+   * buffer with perspective warp. Uses game-palette colours so the
+   * output should look like an early Tempest tunnel approximation. */
+  if ((p1_single & PAD_UP) && g_mcd_present) {
+    mcd_asic_load_tempest_test_stamp();
+    mcd_render_asic(0x280, 12, 6, 1);
+  }
 
   if (p1_single & PAD_B) install_title();
 }
