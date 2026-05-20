@@ -470,28 +470,85 @@ static const int8_t WEB_RIM[16][2] = {
   { -60,   0 }, { -55,  23 }, { -42,  42 }, { -23,  55 },
 };
 
+/* ---- ASIC stamp/map render engine — PROVEN WORKING -----------------------
+ *
+ * Backported from /asic-test/sub/src/spx.c (validated 2026-05-20).
+ *
+ * The earlier "writes 0xFF" symptom was caused by:
+ *   1. Inverted WR-ownership semantics (now matches megadev's wait_2m).
+ *   2. Non-standard IMG-buffer byte-pair layout — each tile row stored
+ *      as [b2,b3,b0,b1] not [b0,b1,b2,b3]. Main side repacks before DMA.
+ *      See reference_megacd_asic_chr_format.md.
+ *
+ * Word RAM layout (sub view, 2M mode, base WORD_RAM_SUB):
+ *   +$00000  stamp data    (stamp N at offset N*512 for 32x32 stamps)
+ *   +$04000  byte-pair-swap scratch (main writes; not used by engine)
+ *   +$10000  stamp map     (256 entries × 2 bytes for 16x16 cells, REPEAT mode)
+ *   +$20000  trace table   (128 entries × 8 bytes = 1024 bytes)
+ *   +$30000  IMG buffer    (128x128 pixels output = 8 KB)
+ *
+ * Fixed-point conventions:
+ *   trace x/y     : 13.3 (1 pixel = 8)
+ *   trace dx/dy   : 5.11 (1.0 = 0x0800)
+ */
+#define ASIC_STAMP_MAP_OFF   0x10000
+#define ASIC_TRACE_OFF       0x20000
+#define ASIC_IMG_OFF         0x30000
+#define ASIC_IMG_W           128
+#define ASIC_IMG_H           128
+
+#define GA_MASK_STAMPSIZE_REPEAT      0x01
+#define GA_MASK_STAMPSIZE_32x32_STAMP 0x02
+
+typedef struct { int16_t x, y, dx, dy; } asic_trace;
+
+/* Common per-frame ASIC config. Caller has already populated the trace
+ * table via fill_trace_*. */
+static void asic_kick(void)
+{
+  *ga_reg_stampmapbase    = (uint16_t) (ASIC_STAMP_MAP_OFF / 4);
+  *ga_reg_imgbufstart     = (uint16_t) (ASIC_IMG_OFF / 4);
+  *ga_reg_stampsize       = GA_MASK_STAMPSIZE_REPEAT | GA_MASK_STAMPSIZE_32x32_STAMP;
+  *ga_reg_imgbufvdotsize  = ASIC_IMG_H;
+  *ga_reg_imgbufhdotsize  = ASIC_IMG_W;
+  *ga_reg_imgbufvsize     = (ASIC_IMG_H / 8) - 1;
+  *ga_reg_imgbufoffset    = 0;
+  *ga_reg_tracevectbase   = (uint16_t) (ASIC_TRACE_OFF / 4);
+  uint32_t t = 0x100000;
+  while (((*ga_reg_stampsize) & 0x8000) && t) { asm("nop"); t--; }
+}
+
+/* Identity transform — same as the megadev transforms example's initial state. */
 static void render_rot(void)
 {
-  asm volatile("move.w #0x2700, %sr");
   wait_2m_sub();
-
-  uint8_t pal = (uint8_t) (*ga_reg_comcmd1 & 0x0F);
-  if (pal == 0) pal = 4;
-
-  img_clear(0x00);
-
-  /* Draw the 16-lane Tempest web into the PRG-RAM staging framebuffer. */
-  for (uint8_t lane = 0; lane < 16; ++lane) {
-    int16_t rim_x = (int16_t) (64 + WEB_RIM[lane][0]);
-    int16_t rim_y = (int16_t) (64 + WEB_RIM[lane][1]);
-    img_line(64, 64, rim_x, rim_y, pal);
+  asic_trace * trace = (asic_trace *) (WORD_RAM_SUB + ASIC_TRACE_OFF);
+  for (uint16_t L = 0; L < ASIC_IMG_H; ++L) {
+    trace[L].x  = 0;
+    trace[L].y  = (int16_t) (L << 3);
+    trace[L].dx = (int16_t) 0x0800;
+    trace[L].dy = 0;
   }
-
-  /* Bulk-copy the assembled framebuffer to WR via a tight long-write loop. */
-  img_flush_to_wr();
-
+  asic_kick();
   grant_2m_sub();
-  asm volatile("move.w #0x2000, %sr");
+}
+
+/* Tempest-style perspective warp: dx grows with line so far lines (top)
+ * sample tightly (more zoom) and near lines (bottom) sample widely. */
+static void render_warp(void)
+{
+  wait_2m_sub();
+  asic_trace * trace = (asic_trace *) (WORD_RAM_SUB + ASIC_TRACE_OFF);
+  for (uint16_t L = 0; L < ASIC_IMG_H; ++L) {
+    int16_t dx = (int16_t) (0x180 + (L << 3));   /* 0x180..0x580 */
+    int16_t x_start = (int16_t) (64 * 8 - (ASIC_IMG_W * (int32_t) dx) / 2);
+    trace[L].x  = x_start;
+    trace[L].y  = (int16_t) (L << 3);
+    trace[L].dx = dx;
+    trace[L].dy = 0;
+  }
+  asic_kick();
+  grant_2m_sub();
 }
 
 // ---- SFX playback (RF5C164 channel 4; MOD claims 0-3) -------------------
@@ -655,6 +712,9 @@ __attribute__((section(".init"))) void main()
 
       case CMD_RENDER_ROT:
         render_rot();
+        break;
+      case CMD_RENDER_WARP:
+        render_warp();
         break;
 
       case CMD_PLAY_SFX:

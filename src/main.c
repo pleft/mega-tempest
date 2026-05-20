@@ -41,7 +41,7 @@ static void read_inputs(void)
 
 // ---- VDP ------------------------------------------------------------------
 
-static u16 vdp_regs[18];
+u16 vdp_regs[18];   /* exposed: mcd.c reads vdp_regs[1] for DMA */
 static u16 cram[64];
 
 static void update_cram(void)
@@ -223,6 +223,12 @@ static void play_gated_vblank (void);
 
 static void install_playfield(void)
 {
+  /* MC-T16 ASIC isolation test: strip everything except the bare minimum
+   * needed to display the ASIC's output. NO music, NO web rendering, NO
+   * entities, NO sprites. Just paint plane B with sequential tile refs
+   * over the web tile range, so the ASIC DMA → VRAM at $5000+ shows up
+   * cleanly. Press C to fire ASIC; if it produces zeros/black, the bug
+   * is in our engine config, not interference from music/game. */
   g_engine.always_vblank = play_always_vblank;
   g_engine.gated_vblank  = play_gated_vblank;
   g_engine.main_thread   = play_main_thread;
@@ -238,32 +244,16 @@ static void install_playfield(void)
   g_flipper_count = 0;
   g_score = 0;
 
-  // Kick off music for the round (Mega CD only — gracefully silent on plain MD).
-  if (g_mcd_present) {
-    if (g_music_playing) {
-      mcd_stop_mod();
-      mcd_wait_ack(CMD_STOP_MOD);
-      g_music_playing = 0;
-    }
-    mcd_upload_mod(&res_rave4_mod);
-    mcd_play_mod(res_rave4_mod.size);
-    mcd_wait_ack(CMD_PLAY_MOD);
-    g_music_playing = 1;
-
-    web_render_main(4);              /* yellow web */
-    web_dma_main_to_vram();
-    web_paint_plane_b();
+  /* Paint plane B with sequential tile refs across a 16x16 cell region
+   * (128x128 pixels) starting at cell (12, 6). When the ASIC DMA hits
+   * tiles $280..$37F, we'll see the 128x128 result there. */
+  for (u8 row = 0; row < 16; ++row) {
+    vdp_ctrl_32 = to_vdp_addr(0x4000 + ((6 + row) * 64 + 12) * 2) | VRAM_W;
+    for (u8 col = 0; col < 16; ++col)
+      vdp_data = (u16) (0x280 + row * 16 + col);
   }
 
-  load_sprite_tiles_to_vram();
-
-  g_player = entity_spawn();
-  if (g_player) {
-    g_player->type         = E_PLAYER;
-    g_player->lane         = g_player_lane;
-    g_player->depth_fp     = FP_ONE;
-    g_player->depth_vel_fp = 0;
-  }
+  /* No music. No web. No sprites. No entities. Just the test. */
 }
 
 static void play_gated_vblank(void)
@@ -435,6 +425,19 @@ static void play_main_thread(void)
 
   /* All entities (player, shots, flippers) render via VDP hardware sprites. */
   render_sprites();
+
+  /* MC-T16 Phase B (post-revival): C = identity render, DOWN = warp render.
+   * Both load Sega-character stamps, fire the ASIC, repack the IMG buffer
+   * (byte-pair swap), DMA to VRAM tile $280, and paint plane B col-major
+   * over the web tile range (cell (12, 6)..(27, 21)). */
+  if ((p1_single & PAD_C) && g_mcd_present) {
+    mcd_asic_load_stamps();
+    mcd_render_asic(0x280, 12, 6, 0);
+  }
+  if ((p1_single & PAD_DOWN) && g_mcd_present) {
+    mcd_asic_load_stamps();
+    mcd_render_asic(0x280, 12, 6, 1);
+  }
 
   if (p1_single & PAD_B) install_title();
 }
