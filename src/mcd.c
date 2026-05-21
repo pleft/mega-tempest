@@ -193,19 +193,17 @@ void mcd_asic_load_tempest_test_stamp(void)
     for (u8 x = 0; x < 32; ++x)
       px[y][x] = 15;
 
-  /* DIAGNOSTIC: ONE 3-pixel-tall horizontal line at y=4..6, full width yellow.
-   * Big enough that any zigzag is unambiguous (not optical illusion of
-   * single-pixel features). */
-  for (u8 x = 0; x < 32; ++x) {
-    px[4][x] = 4;   /* yellow */
-    px[5][x] = 4;
-    px[6][x] = 4;
-  }
-  /* Same at y=12..14 (white), y=20..22 (red), y=28..30 (blue). */
-  for (u8 x = 0; x < 32; ++x) {
-    px[12][x] = 1; px[13][x] = 1; px[14][x] = 1;
-    px[20][x] = 2; px[21][x] = 2; px[22][x] = 2;
-    px[28][x] = 7; px[29][x] = 7; px[30][x] = 7;
+  /* LINE TEST: gray background + yellow vertical line at x=4, white
+   * horizontal line at y=4, red diagonal from (0,0) to (31,31), blue
+   * anti-diagonal from (31,0) to (0,31). Any zigzag = bug remains. */
+  for (u8 y = 0; y < 32; ++y)
+    for (u8 x = 0; x < 32; ++x)
+      px[y][x] = 15;
+  for (u8 i = 0; i < 32; ++i) {
+    px[i][4]      = 4;       /* yellow vertical line at x=4 */
+    px[4][i]      = 1;       /* white horizontal line at y=4 */
+    px[i][i]      = 2;       /* red main diagonal */
+    px[i][31 - i] = 7;       /* blue anti-diagonal */
   }
 
   /* Pack into 16 VDP tiles col-major. Standard byte order [b0,b1,b2,b3]
@@ -330,42 +328,13 @@ void mcd_asic_load_web_stamps(u8 line_pal)
   copy_words((const char *) map_buf, (volatile u16 *) WR_STAMP_MAP, 512);
 }
 
-/* Repack IMG buffer from ASIC's native format to standard VDP tiles.
- *
- * ASIC IMG buffer layout (empirically derived from diagnostic):
- *   32 vertical stripes, 4 pixels wide × 128 tall, 256 bytes per stripe.
- *   ODD-numbered stripes are shifted DOWN by 1 pixel Y compared to
- *   even-numbered stripes (signature alternating zigzag).
- *
- * To get correct VDP tile at display (col, row):
- *   Left 4 pixels from stripe (2*col) at source Y = row*8..row*8+7
- *   Right 4 pixels from stripe (2*col+1) at source Y = row*8+1..row*8+8
- *     (shifted UP by 1 to compensate for the odd-stripe DOWN shift)
- *
- * Bytes per source row in a 4-wide stripe: 2 bytes (= 4 pixels at 4bpp).
- * Stripe is stored as 16 cells of 8 rows each (16 bytes per cell). */
+/* RAW passthrough — no transformation. Use this to see the unmodified
+ * IMG buffer layout for further empirical analysis. */
 static void repack_img_buf(void)
 {
   u8 const * src = (u8 const *) WR_IMG_BUF;
   volatile u8 * dst = (volatile u8 *) WR_REPACK_SCR;
-  for (u8 dc = 0; dc < 16; ++dc) {
-    u8 const * sA_base = src + (u16) (dc * 2)     * 256;   /* even stripe */
-    u8 const * sB_base = src + (u16) (dc * 2 + 1) * 256;   /* odd stripe (shifted) */
-    for (u8 dr = 0; dr < 16; ++dr) {
-      volatile u8 * dt = dst + (u16) (dc * 16 + dr) * 32;
-      for (u8 r = 0; r < 8; ++r) {
-        u16 yA = (u16) (dr * 8 + r);
-        u16 yB = (u16) (dr * 8 + r + 1);
-        if (yB > 127) yB = 127;
-        u16 offA = (u16) ((yA >> 3) * 16 + (yA & 7) * 2);
-        u16 offB = (u16) ((yB >> 3) * 16 + (yB & 7) * 2);
-        dt[r*4 + 0] = sA_base[offA + 0];
-        dt[r*4 + 1] = sA_base[offA + 1];
-        dt[r*4 + 2] = sB_base[offB + 0];
-        dt[r*4 + 3] = sB_base[offB + 1];
-      }
-    }
-  }
+  for (u16 i = 0; i < 8192; ++i) dst[i] = src[i];
 }
 
 /* Full ASIC render pipeline. plane_vram_addr selects which plane gets
@@ -382,21 +351,25 @@ void mcd_render_asic(u16 plane_vram_addr, u16 tile_base, u8 plane_x, u8 plane_y,
   while (*GA_REG_COMSTAT0_W != 0) ;
   wait_2m_main_to(0x80000);
 
-  /* Repack IMG buffer in place inside WR. */
-  repack_img_buf();
-
-  /* DMA repacked 8 KB to VRAM tile_base+ (8192/2 = 4096 words). */
+  /* IMG buffer is in standard 8x8 VDP tile format (just row-major
+   * arrangement, handled in plane B paint below). Direct DMA — no
+   * repack needed. */
   u16 mode2_reg = vdp_regs[1];
   vdp_ctrl = mode2_reg | VDP_DMA_ENABLE;
-  vdp_dma_transfer((char const *) WR_REPACK_SCR,
+  vdp_dma_transfer((char const *) WR_IMG_BUF,
                    to_vdp_addr(tile_base * 32) | VRAM_W, 4096);
   vdp_ctrl = mode2_reg;
 
-  /* Paint chosen plane col-major: tile = col * 16 + row. 16x16 cell area. */
+  /* Paint chosen plane ROW-MAJOR: tile = row * 16 + col. The ASIC's IMG
+   * buffer stores tiles row-major (confirmed via hex dump diagnostic
+   * 2026-05-21: pixel (3, 5) of stamp at IMG positions 3, 35, 67, 99
+   * landed at byte offsets 0x15, 0x95, 0x115, 0x195 — that's tiles 0,
+   * 4, 8, 12 = row-major. Earlier "col-major" interpretation was wrong
+   * but happened to look OK for symmetric stamps). */
   for (u8 row = 0; row < 16; ++row) {
     vdp_ctrl_32 = to_vdp_addr(plane_vram_addr + ((plane_y + row) * 64 + plane_x) * 2) | VRAM_W;
     for (u8 col = 0; col < 16; ++col) {
-      vdp_data = (u16) (tile_base + col * 16 + row);
+      vdp_data = (u16) (tile_base + row * 16 + col);
     }
   }
 }
