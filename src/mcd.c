@@ -1,5 +1,6 @@
 #include "mcd.h"
 #include "res.h"
+#include "web.h"             /* g_web_buf + web_render_main */
 #include <main/gate_arr.def.h>
 #include <main/memmap.h>
 #include <main/vdp.h>
@@ -229,6 +230,59 @@ void mcd_asic_load_tempest_test_stamp(void)
   copy_words((const char *) map_buf, (volatile u16 *) WR_STAMP_MAP, 512);
 }
 
+/* Pre-render the current web shape into 16 ASIC stamps + 4x4 stamp map.
+ *
+ * Reuses the software rasterizer (web_render_main writes to g_web_buf,
+ * 26x26 cells = 208x208 px). We extract the centre 16x16 cells (cells 5..20)
+ * and pack them as 16 stamps of 4x4 tiles each, col-major within each stamp.
+ *
+ * Stamp layout in WR:
+ *   slot 1 at $200 = grid (0,0), slot 2 at $400 = grid (0,1), ... 16 at $2000.
+ *   Stamp index in map = data_offset / $80 → values 4, 8, 12, ..., 64.
+ *
+ * Stamp map: cells (col 0..3, row 0..3) reference stamps 1..16 in col-major
+ * order; all other cells = 0 (transparent; with REPEAT they wrap but at
+ * identity sampling the IMG buffer never sees beyond cell 3). */
+void mcd_asic_load_web_stamps(u8 line_pal)
+{
+  /* (1) Render web into main-RAM buffer (does NOT DMA — that step is left
+   *     to the regular software-web pipeline if both layers want to coexist). */
+  web_render_main(line_pal);
+
+  /* (2) Wait for WR ownership, then extract + pack. */
+  wait_2m_main_to(0x80000);
+
+  enum { EXTRACT_OFFSET = 5 };           /* center of 26x26, want 16 → start at 5 */
+  for (u8 mc = 0; mc < 4; ++mc) {
+    for (u8 mr = 0; mr < 4; ++mr) {
+      u8 stamp_idx = (u8) (mc * 4 + mr + 1);              /* 1..16 */
+      volatile u8 * stamp = (volatile u8 *) (WR_MAIN + stamp_idx * 0x200);
+      for (u8 t = 0; t < 16; ++t) {
+        u8 in_col = t >> 2;
+        u8 in_row = t & 3;
+        u8 src_gc = (u8) (EXTRACT_OFFSET + mc * 4 + in_col);
+        u8 src_gr = (u8) (EXTRACT_OFFSET + mr * 4 + in_row);
+        u16 src_off = (u16) ((u16) src_gr * WEB_BUF_CELLS + src_gc) * 32;
+        volatile u8 * dst_tile = stamp + (u16) t * 32;
+        u8 const * src_tile = web_get_buf() + src_off;
+        for (u8 b = 0; b < 32; ++b) dst_tile[b] = src_tile[b];
+      }
+    }
+  }
+
+  /* (3) Stamp map: 4x4 top-left cells reference stamps, rest = 0. */
+  static u16 map_buf[256];
+  for (u16 i = 0; i < 256; ++i) map_buf[i] = 0;
+  for (u8 mc = 0; mc < 4; ++mc) {
+    for (u8 mr = 0; mr < 4; ++mr) {
+      u8 stamp_idx = (u8) (mc * 4 + mr + 1);
+      /* Map index = data_offset / $80 = (stamp_idx * $200) / $80 = stamp_idx*4 */
+      map_buf[mr * 16 + mc] = (u16) (stamp_idx * 4);
+    }
+  }
+  copy_words((const char *) map_buf, (volatile u16 *) WR_STAMP_MAP, 512);
+}
+
 /* Repack the 128x128 IMG buffer (256 tiles, 8 KB) from non-standard
  * [b2,b3,b0,b1] byte-pair layout to standard VDP tile format. Source:
  * IMG buffer in WR. Dest: scratch in WR. Both stay in Word RAM since
@@ -249,12 +303,9 @@ static void repack_img_buf(void)
   }
 }
 
-/* Full ASIC render pipeline: fire sub → repack → DMA to VRAM →
- * paint plane B col-major. tile_base is the VRAM tile index where
- * the 256-tile (128x128 px / 8x8) IMG content gets DMA'd. plane_x/y
- * is the upper-left plane-B cell position to paint (16x16 cells).
- * warp=0 fires identity; warp=1 fires Tempest-style perspective. */
-void mcd_render_asic(u16 tile_base, u8 plane_x, u8 plane_y, u8 warp)
+/* Full ASIC render pipeline. plane_vram_addr selects which plane gets
+ * painted (0x2000 = plane A, 0x4000 = plane B). */
+void mcd_render_asic(u16 plane_vram_addr, u16 tile_base, u8 plane_x, u8 plane_y, u8 warp)
 {
   u16 cmd = warp ? CMD_RENDER_WARP : CMD_RENDER_ROT;
 
@@ -276,9 +327,9 @@ void mcd_render_asic(u16 tile_base, u8 plane_x, u8 plane_y, u8 warp)
                    to_vdp_addr(tile_base * 32) | VRAM_W, 4096);
   vdp_ctrl = mode2_reg;
 
-  /* Paint plane B col-major: tile = col * 16 + row. 16x16 cell area. */
+  /* Paint chosen plane col-major: tile = col * 16 + row. 16x16 cell area. */
   for (u8 row = 0; row < 16; ++row) {
-    vdp_ctrl_32 = to_vdp_addr(0x4000 + ((plane_y + row) * 64 + plane_x) * 2) | VRAM_W;
+    vdp_ctrl_32 = to_vdp_addr(plane_vram_addr + ((plane_y + row) * 64 + plane_x) * 2) | VRAM_W;
     for (u8 col = 0; col < 16; ++col) {
       vdp_data = (u16) (tile_base + col * 16 + row);
     }

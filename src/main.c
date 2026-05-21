@@ -223,12 +223,10 @@ static void play_gated_vblank (void);
 
 static void install_playfield(void)
 {
-  /* MC-T16 ASIC isolation test: strip everything except the bare minimum
-   * needed to display the ASIC's output. NO music, NO web rendering, NO
-   * entities, NO sprites. Just paint plane B with sequential tile refs
-   * over the web tile range, so the ASIC DMA → VRAM at $5000+ shows up
-   * cleanly. Press C to fire ASIC; if it produces zeros/black, the bug
-   * is in our engine config, not interference from music/game. */
+  /* MC-T17: full game restored. The ASIC test rig (C/DOWN/UP) is still
+   * present for visual verification — those buttons overwrite a slice
+   * of the web with ASIC output. Next step is moving the web rendering
+   * to the ASIC pipeline entirely. */
   g_engine.always_vblank = play_always_vblank;
   g_engine.gated_vblank  = play_gated_vblank;
   g_engine.main_thread   = play_main_thread;
@@ -244,16 +242,33 @@ static void install_playfield(void)
   g_flipper_count = 0;
   g_score = 0;
 
-  /* Paint plane B with sequential tile refs across a 16x16 cell region
-   * (128x128 pixels) starting at cell (12, 6). When the ASIC DMA hits
-   * tiles $280..$37F, we'll see the 128x128 result there. */
-  for (u8 row = 0; row < 16; ++row) {
-    vdp_ctrl_32 = to_vdp_addr(0x4000 + ((6 + row) * 64 + 12) * 2) | VRAM_W;
-    for (u8 col = 0; col < 16; ++col)
-      vdp_data = (u16) (0x280 + row * 16 + col);
+  // Kick off music for the round (Mega CD only — gracefully silent on plain MD).
+  if (g_mcd_present) {
+    if (g_music_playing) {
+      mcd_stop_mod();
+      mcd_wait_ack(CMD_STOP_MOD);
+      g_music_playing = 0;
+    }
+    mcd_upload_mod(&res_rave4_mod);
+    mcd_play_mod(res_rave4_mod.size);
+    mcd_wait_ack(CMD_PLAY_MOD);
+    g_music_playing = 1;
+
+    web_render_main(4);              /* yellow web */
+    web_dma_main_to_vram();
+    web_paint_plane_b();
   }
 
-  /* No music. No web. No sprites. No entities. Just the test. */
+  load_sprite_tiles_to_vram();
+
+  /* Player entity. */
+  g_player = entity_spawn();
+  if (g_player) {
+    g_player->type         = E_PLAYER;
+    g_player->lane         = g_player_lane;
+    g_player->depth_fp     = FP_ONE;
+    g_player->depth_vel_fp = 0;
+  }
 }
 
 static void play_gated_vblank(void)
@@ -432,18 +447,19 @@ static void play_main_thread(void)
    * over the web tile range (cell (12, 6)..(27, 21)). */
   if ((p1_single & PAD_C) && g_mcd_present) {
     mcd_asic_load_stamps();
-    mcd_render_asic(0x280, 12, 6, 0);
+    mcd_render_asic(0x4000, 0x280, 12, 6, 0);   /* plane B, identity */
   }
   if ((p1_single & PAD_DOWN) && g_mcd_present) {
     mcd_asic_load_stamps();
-    mcd_render_asic(0x280, 12, 6, 1);
+    mcd_render_asic(0x4000, 0x280, 12, 6, 1);   /* plane B, warp */
   }
-  /* UP: render a Tempest-styled web-cell stamp tiled across the IMG
-   * buffer with perspective warp. Uses game-palette colours so the
-   * output should look like an early Tempest tunnel approximation. */
+  /* UP: pre-render the CURRENT web shape into 16 ASIC stamps with RED
+   * lines (palette 2) — visually distinct from the software's yellow
+   * lines on plane B. Identity transform. If we see red web outlines
+   * appearing inside the yellow ones, the ASIC pre-render works. */
   if ((p1_single & PAD_UP) && g_mcd_present) {
-    mcd_asic_load_tempest_test_stamp();
-    mcd_render_asic(0x280, 12, 6, 1);
+    mcd_asic_load_web_stamps(2);                /* red lane lines */
+    mcd_render_asic(0x2000, 0x600, 12, 6, 0);   /* plane A, IDENTITY */
   }
 
   if (p1_single & PAD_B) install_title();

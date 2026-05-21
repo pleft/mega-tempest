@@ -54,6 +54,11 @@
 
 static u8 g_web_buf[WEB_BUF_BYTES];
 
+/* Expose buffer pointer + dim through a getter — keep the array static
+ * to match MC-T15's exact linkage (non-static placement may shift other
+ * BSS/RAM addresses and trigger the SQUARE stippling regression). */
+u8 * web_get_buf(void) { return g_web_buf; }
+
 /* Lane MIDPOINT positions — entities live in the gaps BETWEEN adjacent
  * radial lines (T2K convention). Sized to MAX_LANES (17, the largest
  * T2K web); the current shape's `g_lane_count` says how many of these

@@ -15,10 +15,11 @@ void mcd_play_mod(u32 size);
 void mcd_stop_mod(void);
 void mcd_play_sfx(u8 idx);                          /* idx = 0 FIRE / 1 HIT / 2 DEATH */
 /* Fire the ASIC engine and render its output to VRAM at tile_base, painting
- * plane B at (plane_x, plane_y) with a 16x16 cell region. If `warp` is
- * non-zero, the sub uses a Tempest-style perspective trace; otherwise
- * identity. Caller must have called mcd_asic_load_stamps() at least once. */
-void mcd_render_asic(u16 tile_base, u8 plane_x, u8 plane_y, u8 warp);
+ * plane at `plane_vram_addr` at (plane_x, plane_y) with a 16x16 cell region.
+ * plane_vram_addr is 0x2000 (plane A) or 0x4000 (plane B).
+ * `warp` non-zero = Tempest perspective trace, else identity.
+ * Caller must have loaded stamps via mcd_asic_load_*. */
+void mcd_render_asic(u16 plane_vram_addr, u16 tile_base, u8 plane_x, u8 plane_y, u8 warp);
 /* Copy the demo Sega-character stamps + stamp map to WR. */
 void mcd_asic_load_stamps(void);
 
@@ -27,6 +28,11 @@ void mcd_asic_load_stamps(void);
  * single stamp repeating. Uses the game's CRAM indices so the output
  * looks right in the playfield palette. */
 void mcd_asic_load_tempest_test_stamp(void);
+
+/* Rasterize the current web shape into 16 ASIC stamps (4x4 = 128x128 px),
+ * arrange them in the stamp map's top-left 4x4 cells, ready for ASIC
+ * perspective render. line_pal is the palette index for the lane lines. */
+void mcd_asic_load_web_stamps(u8 line_pal);
 void mcd_wait_ack(u16 expected);
 
 #endif

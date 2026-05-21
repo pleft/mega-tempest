@@ -58,6 +58,11 @@ void web_dma_main_to_vram(void);
 void web_paint_plane_b(void);
 void web_clear_plane_b(void);
 
+/* Exposed for the ASIC stamp packer in mcd.c via getter — keep array
+ * static internally to match MC-T15 exact linkage. */
+#define WEB_BUF_CELLS 26
+u8 * web_get_buf(void);
+
 /* Generate + DMA all sprite tile data (player, shots, enemies) to VRAM.
  * Called once per scene install. */
 void load_sprite_tiles_to_vram(void);
