@@ -453,12 +453,9 @@ static void play_main_thread(void)
     mcd_asic_load_stamps();
     mcd_render_asic(0x4000, 0x280, 12, 6, 1);   /* plane B, warp */
   }
-  /* UP: pre-render the CURRENT web shape into 16 ASIC stamps with RED
-   * lines (palette 2) — visually distinct from the software's yellow
-   * lines on plane B. Identity transform. If we see red web outlines
-   * appearing inside the yellow ones, the ASIC pre-render works. */
+  /* UP: diagnostic — 4 single pixels in known stamp positions. */
   if ((p1_single & PAD_UP) && g_mcd_present) {
-    mcd_asic_load_web_stamps(2);                /* red lane lines */
+    mcd_asic_load_tempest_test_stamp();
     mcd_render_asic(0x2000, 0x600, 12, 6, 0);   /* plane A, IDENTITY */
   }
 

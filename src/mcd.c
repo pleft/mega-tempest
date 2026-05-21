@@ -181,29 +181,31 @@ void mcd_asic_load_tempest_test_stamp(void)
 {
   wait_2m_main_to(0x80000);
 
-  /* Build a Tempest-styled stamp programmatically into main RAM, then
-   * copy_words into WR slot 1 ($200). Stamp-map entry value = stamp
-   * data offset / 0x80 — for 32x32 stamps this means the stamp at
-   * offset N*0x200 needs map entries of value N*4. Stamp at $200 → 4. */
+  /* DEBUG diagnostic stamp: one yellow vertical line at column 4 of
+   * EVERY tile. If ASIC's IMG output preserves this geometry, we should
+   * see vertical yellow lines at x=4, 12, 20, 28 in the 32x32 stamp.
+   * After 16x16 cell map, IMG buffer = 128x128 should show vertical
+   * yellow stripes at x = 4, 12, 20, ..., 124 in the IMG output. */
   static u16 stamp_buf[256];
-
-  /* Generate per-pixel palette indices for a 32x32 stamp. */
   static u8 px[32][32];
-  for (u8 y = 0; y < 32; ++y) {
-    for (u8 x = 0; x < 32; ++x) {
-      u8 c;
-      u8 dx = (x < 16) ? x : (31 - x);
-      u8 dy = (y < 16) ? y : (31 - y);
-      u8 d  = dx < dy ? dx : dy;     /* distance to nearest edge */
-      if      (d == 0) c = 4;        /* outermost rim — yellow */
-      else if (d == 1) c = 8;        /* brightest blue */
-      else if (d == 2) c = 7;        /* medium blue */
-      else if (d == 3) c = 6;        /* dark blue */
-      else if (d <= 5) c = 5;        /* darkest navy */
-      else             c = 0;        /* interior — black */
-      if ((x == 15 || x == 16) && (y == 15 || y == 16)) c = 4;
-      px[y][x] = c;
-    }
+  /* Background = gray (palette 15). */
+  for (u8 y = 0; y < 32; ++y)
+    for (u8 x = 0; x < 32; ++x)
+      px[y][x] = 15;
+
+  /* DIAGNOSTIC: ONE 3-pixel-tall horizontal line at y=4..6, full width yellow.
+   * Big enough that any zigzag is unambiguous (not optical illusion of
+   * single-pixel features). */
+  for (u8 x = 0; x < 32; ++x) {
+    px[4][x] = 4;   /* yellow */
+    px[5][x] = 4;
+    px[6][x] = 4;
+  }
+  /* Same at y=12..14 (white), y=20..22 (red), y=28..30 (blue). */
+  for (u8 x = 0; x < 32; ++x) {
+    px[12][x] = 1; px[13][x] = 1; px[14][x] = 1;
+    px[20][x] = 2; px[21][x] = 2; px[22][x] = 2;
+    px[28][x] = 7; px[29][x] = 7; px[30][x] = 7;
   }
 
   /* Pack into 16 VDP tiles col-major. Standard byte order [b0,b1,b2,b3]
@@ -243,11 +245,56 @@ void mcd_asic_load_tempest_test_stamp(void)
  * Stamp map: cells (col 0..3, row 0..3) reference stamps 1..16 in col-major
  * order; all other cells = 0 (transparent; with REPEAT they wrap but at
  * identity sampling the IMG buffer never sees beyond cell 3). */
+/* Helper: read 4bpp pixel at (x, y) from g_web_buf (208x208, 26x26 tiles). */
+static u8 web_buf_getpx(u8 const * buf, s16 x, s16 y)
+{
+  if ((u16) x >= 208 || (u16) y >= 208) return 0;
+  u16 cell_off = (u16) ((y >> 3) * WEB_BUF_CELLS + (x >> 3)) * 32;
+  u16 byte_off = (u16) ((y & 7) * 4 + ((x & 7) >> 1));
+  u8 b = buf[cell_off + byte_off];
+  return (x & 1) ? (u8)(b & 0x0F) : (u8)(b >> 4);
+}
+
+static void web_buf_setpx(u8 * buf, s16 x, s16 y, u8 pal)
+{
+  if ((u16) x >= 208 || (u16) y >= 208) return;
+  u16 cell_off = (u16) ((y >> 3) * WEB_BUF_CELLS + (x >> 3)) * 32;
+  u16 byte_off = (u16) ((y & 7) * 4 + ((x & 7) >> 1));
+  u8 * dst = buf + cell_off + byte_off;
+  if (x & 1) *dst = (u8) ((*dst & 0xF0) | (pal & 0x0F));
+  else       *dst = (u8) ((*dst & 0x0F) | ((pal & 0x0F) << 4));
+}
+
+/* Thicken every line-colored pixel by setting its right + below neighbor
+ * to the same palette index. Combats the ASIC pipeline's per-column
+ * tile-row jitter so 1-pixel Bresenham lines survive intact. */
+static void web_buf_dilate(u8 * buf, u8 line_pal)
+{
+  /* Horizontal dilation: scan right-to-left so we don't double-process. */
+  for (s16 y = 0; y < 208; ++y) {
+    for (s16 x = 207; x >= 1; --x) {
+      if (web_buf_getpx(buf, x - 1, y) == line_pal &&
+          web_buf_getpx(buf, x, y) != line_pal)
+        web_buf_setpx(buf, x, y, line_pal);
+    }
+  }
+  /* Vertical dilation: scan bottom-up. */
+  for (s16 y = 207; y >= 1; --y) {
+    for (s16 x = 0; x < 208; ++x) {
+      if (web_buf_getpx(buf, x, y - 1) == line_pal &&
+          web_buf_getpx(buf, x, y) != line_pal)
+        web_buf_setpx(buf, x, y, line_pal);
+    }
+  }
+}
+
 void mcd_asic_load_web_stamps(u8 line_pal)
 {
   /* (1) Render web into main-RAM buffer (does NOT DMA — that step is left
    *     to the regular software-web pipeline if both layers want to coexist). */
   web_render_main(line_pal);
+  /* No workarounds; once the ASIC pipeline is fixed properly, dilation
+   * won't be necessary. */
 
   /* (2) Wait for WR ownership, then extract + pack. */
   wait_2m_main_to(0x80000);
@@ -283,22 +330,40 @@ void mcd_asic_load_web_stamps(u8 line_pal)
   copy_words((const char *) map_buf, (volatile u16 *) WR_STAMP_MAP, 512);
 }
 
-/* Repack the 128x128 IMG buffer (256 tiles, 8 KB) from non-standard
- * [b2,b3,b0,b1] byte-pair layout to standard VDP tile format. Source:
- * IMG buffer in WR. Dest: scratch in WR. Both stay in Word RAM since
- * the VDP-DMA-from-WR path is proven. */
+/* Repack IMG buffer from ASIC's native format to standard VDP tiles.
+ *
+ * ASIC IMG buffer layout (empirically derived from diagnostic):
+ *   32 vertical stripes, 4 pixels wide × 128 tall, 256 bytes per stripe.
+ *   ODD-numbered stripes are shifted DOWN by 1 pixel Y compared to
+ *   even-numbered stripes (signature alternating zigzag).
+ *
+ * To get correct VDP tile at display (col, row):
+ *   Left 4 pixels from stripe (2*col) at source Y = row*8..row*8+7
+ *   Right 4 pixels from stripe (2*col+1) at source Y = row*8+1..row*8+8
+ *     (shifted UP by 1 to compensate for the odd-stripe DOWN shift)
+ *
+ * Bytes per source row in a 4-wide stripe: 2 bytes (= 4 pixels at 4bpp).
+ * Stripe is stored as 16 cells of 8 rows each (16 bytes per cell). */
 static void repack_img_buf(void)
 {
   u8 const * src = (u8 const *) WR_IMG_BUF;
   volatile u8 * dst = (volatile u8 *) WR_REPACK_SCR;
-  for (u16 t = 0; t < 256; ++t) {
-    u8 const * st = src + t * 32;
-    volatile u8 * dt = dst + t * 32;
-    for (u8 r = 0; r < 8; ++r) {
-      dt[r*4 + 0] = st[r*4 + 2];
-      dt[r*4 + 1] = st[r*4 + 3];
-      dt[r*4 + 2] = st[r*4 + 0];
-      dt[r*4 + 3] = st[r*4 + 1];
+  for (u8 dc = 0; dc < 16; ++dc) {
+    u8 const * sA_base = src + (u16) (dc * 2)     * 256;   /* even stripe */
+    u8 const * sB_base = src + (u16) (dc * 2 + 1) * 256;   /* odd stripe (shifted) */
+    for (u8 dr = 0; dr < 16; ++dr) {
+      volatile u8 * dt = dst + (u16) (dc * 16 + dr) * 32;
+      for (u8 r = 0; r < 8; ++r) {
+        u16 yA = (u16) (dr * 8 + r);
+        u16 yB = (u16) (dr * 8 + r + 1);
+        if (yB > 127) yB = 127;
+        u16 offA = (u16) ((yA >> 3) * 16 + (yA & 7) * 2);
+        u16 offB = (u16) ((yB >> 3) * 16 + (yB & 7) * 2);
+        dt[r*4 + 0] = sA_base[offA + 0];
+        dt[r*4 + 1] = sA_base[offA + 1];
+        dt[r*4 + 2] = sB_base[offB + 0];
+        dt[r*4 + 3] = sB_base[offB + 1];
+      }
     }
   }
 }
