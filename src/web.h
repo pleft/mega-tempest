@@ -72,22 +72,16 @@ void web_render_for_asic(u8 * buf, u8 pal);
 
 /* Exposed for the ASIC stamp packer in mcd.c via getter — keep array
  * static internally to match MC-T15 exact linkage. */
-#define WEB_BUF_CELLS 26
+#define WEB_BUF_CELLS 20
 u8 * web_get_buf(void);
 
 /* Generate + DMA all sprite tile data (player, shots, enemies) to VRAM.
  * Called once per scene install. */
 void load_sprite_tiles_to_vram(void);
 
-/* True-3D camera, used by web_init for rim projection and by
- * web_render_main when rasterising. Set per frame before calling
- * web_init + web_render_main.
- *
- *   screen_outer = (world - vp) / Z_NEAR + centre
- *   screen_inner = (world - vp) / Z_FAR  + centre   (Z_FAR = 8 * Z_NEAR)
- *
- * Outer rim shifts by full vp, inner rim shifts by vp/8 — matches T2K
- * Jaguar's `polyo2d` per-vertex projection. */
+/* World-space camera. Outer-rim sprites shift by full g_vp_x/y,
+ * inner-rim by /8; emit_sprite interpolates by entity depth_fp.
+ * ASIC trace applies the matching V-shape shift to the visible web. */
 extern s16 g_vp_x;
 extern s16 g_vp_y;
 

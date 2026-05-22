@@ -255,14 +255,20 @@ static void install_playfield(void)
     g_music_playing = 1;
 
   }
-  /* Web is software-rendered every frame for true-3D camera. Initial
-   * render gets it on plane B before play_main_thread's first frame. */
   g_vp_x = 0;
   g_vp_y = 0;
   web_init();
-  web_render_main(4);
-  web_dma_main_to_vram();
-  web_paint_plane_b();
+  if (g_mcd_present) {
+    /* ASIC pipeline: software web renders fills+lines into stamps,
+     * ASIC re-renders per frame with V-shape camera tilt. */
+    mcd_asic_load_web_stamps(4);
+    mcd_render_asic(0x4000, 0x280, 10, 4, 0);
+  } else {
+    /* No Mega CD: static software web (no camera pan). */
+    web_render_main(4);
+    web_dma_main_to_vram();
+    web_paint_plane_b();
+  }
 
   load_sprite_tiles_to_vram();
 
@@ -443,26 +449,26 @@ static void play_main_thread(void)
   plane_putc(34, 27, (char) ('0' + (s % 10)));
 
 
-  /* True-3D camera: vp_x/vp_y track the player's world-space rim
-   * offset, damped /4 so the pan is subtle. web_init projects the
-   * rim per-vertex with 1/Z so outer rim shifts fully and inner rim
-   * shifts /8. Re-rasterise + DMA + paint each frame.
-   *
-   * world units use the same scale as web_scale() output. Outer rim
-   * at world ±60. Damping (>>2) keeps vp in [-15, +15] which is a
-   * comfortable subset of rim radius. */
-  s16 px = web_pixel_x(g_player_lane, FP_ONE);
-  s16 py = web_pixel_y(g_player_lane, FP_ONE);
-  /* px/py here are PROJECTED screen coords from the previous frame's
-   * projection — convert back to world-relative by subtracting screen
-   * centre, then damp. */
-  g_vp_x = (s16) ((px - 160) >> 2);
-  g_vp_y = (s16) ((py - 112) >> 2);
-
-  web_project();
-  web_render_main(4);
-  web_dma_main_to_vram();
-  web_paint_plane_b();
+  /* Camera tracks player outer-rim position, damped /8 + clamped ±5 to
+   * stay within source web margin. ASIC V-shape trace shifts outer rim
+   * fully and inner rim /8 → 3D-like perspective at 60Hz. Sprites use
+   * the same vp via depth-interpolated cam offset. */
+  if (g_mcd_present) {
+    s16 px = web_pixel_x(g_player_lane, FP_ONE);
+    s16 py = web_pixel_y(g_player_lane, FP_ONE);
+    s16 cx = (s16) ((px - 160) >> 3);
+    s16 cy = (s16) ((py - 112) >> 3);
+    if (cx > 5)  cx = 5;
+    if (cx < -5) cx = -5;
+    if (cy > 5)  cy = 5;
+    if (cy < -5) cy = -5;
+    g_vp_x = cx;
+    g_vp_y = cy;
+    mcd_render_asic_tilt(0x4000, 0x280, 10, 4, g_vp_x, g_vp_y);
+  } else {
+    g_vp_x = 0;
+    g_vp_y = 0;
+  }
 
   render_sprites();
 

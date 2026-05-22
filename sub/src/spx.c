@@ -541,9 +541,9 @@ static inline int16_t div_s32_s16(int32_t num, int16_t den)
   return (int16_t) t;
 }
 
-/* Camera pan only — identity zoom (dx=1.0). Per-line dx variation
- * shifts the visible rim position in IMG which decouples it from the
- * sprite positions, so we keep dx flat. */
+/* Uniform 2D pan — every line samples source at the same (tilt_x,
+ * tilt_y) offset. No differential 3D shift, but no per-line stripping
+ * artefact either. 60Hz capable. */
 static void render_tilt(int16_t tilt_x, int16_t tilt_y)
 {
   wait_2m_sub();

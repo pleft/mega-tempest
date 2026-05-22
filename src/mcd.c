@@ -329,10 +329,9 @@ void mcd_asic_load_web_stamps(u8 line_pal)
 
   wait_2m_main_to(0x80000);
 
-  /* Pack 5x5 = 25 stamps from g_web_buf cells (3..22) — the centre
-   * 160x160 region (buffer pixels 24..183) which contains the full
-   * scale-5/4 web with 5px margin for camera pan. */
-  enum { EXTRACT_OFFSET = 3 };
+  /* Pack 5x5 = 25 stamps from g_web_buf cells (0..19) — full 160x160
+   * software web at scale 5/4 (rim 75, 5px margin for camera pan). */
+  enum { EXTRACT_OFFSET = 0 };
   for (u8 mc = 0; mc < 5; ++mc) {
     for (u8 mr = 0; mr < 5; ++mr) {
       u8 stamp_idx = (u8) (mc * 5 + mr + 1);          /* 1..25 */

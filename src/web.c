@@ -38,7 +38,7 @@
  * outer rim's centre — you're looking slightly down into the playfield).
  * Positive = downward; for a Tempest-style "look down the tube" we use
  * negative = inner shape lifted upward. */
-#define WEB_VANISH_OFFSET_Y  0
+#define WEB_VANISH_OFFSET_Y  (-25)
 
 /* Sprite-tile VRAM slots (data from src/sprites.{c,h}, baked by
  * tools/extract_mcd_sprites.py from tempest2k-source/src/obj2d.s).
@@ -229,25 +229,23 @@ u8 g_web_shape = WEB_SHAPE_V;
 
 // ---- Lane projection ------------------------------------------------------
 
-/* Per-frame rim projection (uses g_vp_x / g_vp_y). Recomputes
- * g_lane_mid_outer/inner. Must be called before web_render_main
- * each frame; entity sprites read these via web_pixel_x/y. */
+/* STATIC rim projection (no per-frame call needed). Stored positions
+ * are camera-at-origin; per-frame camera pan is applied by the ASIC
+ * trace and by emit_sprite (depth-interpolated). */
 void web_project(void)
 {
   const s8 (*rim)[2] = WEB_RIMS[g_web_shape];
-  u8 const V = WEB_LANE_COUNT[g_web_shape];  /* rim vertex count */
+  u8 const V = WEB_LANE_COUNT[g_web_shape];
 
   s16 line_outer_x[MAX_LANES], line_outer_y[MAX_LANES];
   s16 line_inner_x[MAX_LANES], line_inner_y[MAX_LANES];
   for (u8 i = 0; i < V; ++i) {
     s16 sx = web_scale(rim[i][0]);
     s16 sy = web_scale(rim[i][1]);
-    s16 dx = (s16) (sx - g_vp_x);
-    s16 dy = (s16) (sy - g_vp_y);
-    line_outer_x[i] = (s16) (WEB_CENTER_X + dx);
-    line_outer_y[i] = (s16) (WEB_CENTER_Y + dy);
-    line_inner_x[i] = (s16) (WEB_CENTER_X + (dx >> 3));
-    line_inner_y[i] = (s16) (WEB_CENTER_Y + WEB_VANISH_OFFSET_Y + (dy >> 3));
+    line_outer_x[i] = (s16) (WEB_CENTER_X + sx);
+    line_outer_y[i] = (s16) (WEB_CENTER_Y + sy);
+    line_inner_x[i] = (s16) (WEB_CENTER_X + (sx >> 3));
+    line_inner_y[i] = (s16) (WEB_CENTER_Y + WEB_VANISH_OFFSET_Y + (sy >> 3));
   }
 
   u8 lane_segments = (u8) (g_shape_closed ? V : V - 1);
@@ -529,18 +527,16 @@ static void web_render_to(WebCfg const * cfg, u8 pal)
   s16 const cx = (s16) (cfg->img_w / 2);
   s16 const cy = (s16) (cfg->img_h / 2);
 
-  /* Per-vertex 3D projection (matches web_init). Outer Z=1, inner Z=8.
-   * (vp_x, vp_y) are in world units = same scale as web_scale_c output. */
+  /* Static rim points (camera at origin). Per-frame camera pan is
+   * applied later by the ASIC trace, not in the source rasterisation. */
   s16 ox[MAX_LANES], oy[MAX_LANES], ix[MAX_LANES], iy[MAX_LANES];
   for (u8 k = 0; k < V; ++k) {
     s16 sx = web_scale_c(cfg, rim[k][0]);
     s16 sy = web_scale_c(cfg, rim[k][1]);
-    s16 dx = (s16) (sx - g_vp_x);
-    s16 dy = (s16) (sy - g_vp_y);
-    ox[k] = (s16) (cx + dx);
-    oy[k] = (s16) (cy + dy);
-    ix[k] = (s16) (cx + (dx >> 3));
-    iy[k] = (s16) (cy + (dy >> 3) + cfg->vanish_y);
+    ox[k] = (s16) (cx + sx);
+    oy[k] = (s16) (cy + sy);
+    ix[k] = (s16) (cx + (sx >> 3));
+    iy[k] = (s16) (cy + (sy >> 3) + cfg->vanish_y);
   }
 
   /* 1. FILL each lane segment with a 4-band depth gradient. Skip when
@@ -596,7 +592,8 @@ static void web_render_to(WebCfg const * cfg, u8 pal)
 
 void web_render_main(u8 pal)
 {
-  /* Lines-only rasterisation at 160x160, scale 5/4 (rim 75). */
+  /* Full software rasterisation (fills + lines) at 160x160 scale 5/4.
+   * Rendered ONCE at install; ASIC re-renders per frame via stamp+trace. */
   WebCfg cfg_local = {
     .buf        = g_web_buf,
     .img_w      = WEB_IMG_W,
@@ -605,7 +602,7 @@ void web_render_main(u8 pal)
     .vanish_y   = WEB_VANISH_OFFSET_Y,
     .scale_num  = 5,
     .scale_den  = 4,
-    .skip_fills = 1,
+    .skip_fills = 0,
   };
   web_render_to(&cfg_local, pal);
 }
@@ -716,20 +713,22 @@ void load_sprite_tiles_to_vram(void)
   }
 }
 
-/* True-3D camera state. web_init projects rim vertices with vp_x/vp_y
- * subtracted before the Z divide, so g_lane_mid_outer/inner already
- * reflect the current camera. web_pixel_x/y returns those projected
- * screen coords, so sprites use them directly — no per-sprite offset. */
+/* Camera state. Rim positions stored at camera=0; per-frame pan is
+ * applied to sprites here (interpolated by depth) and to the visible
+ * web via the ASIC's V-shape trace. */
 s16 g_vp_x = 0;
 s16 g_vp_y = 0;
 
-static inline void emit_sprite(u16 * buf, u8 idx, const SpriteSizeDef * sz,
-                               s16 px, s16 py)
+/* Uniform camera pan applied to all sprites; matches the visible web's
+ * uniform ASIC pan. (No depth interpolation — fast and consistent.) */
+static inline void emit_sprite_depth(u16 * buf, u8 idx, const SpriteSizeDef * sz,
+                                     s16 px, s16 py, fp16 depth_fp)
 {
-  buf[idx * 4 + 0] = (u16) (py + 128 - sz->half);                     /* Y */
+  (void) depth_fp;
+  buf[idx * 4 + 0] = (u16) (py - g_vp_y + 128 - sz->half);            /* Y */
   buf[idx * 4 + 1] = (u16) (((u16) sz->size_byte << 8) | (idx + 1));  /* size + link */
   buf[idx * 4 + 2] = sz->tile_base;                                   /* tile */
-  buf[idx * 4 + 3] = (u16) (px + 128 - sz->half);                     /* X */
+  buf[idx * 4 + 3] = (u16) (px - g_vp_x + 128 - sz->half);            /* X */
 }
 
 void render_sprites(void)
@@ -748,7 +747,7 @@ void render_sprites(void)
     SpriteSizeDef sz = { SPR_SIZE_2x2,
                          (u16) (PLAYER_TILE_BASE + g_claw_render_idx * PLAYER_TILES_PER_LANE),
                          8 };
-    emit_sprite(spr_buf, n++, &sz, px, py);
+    emit_sprite_depth(spr_buf, n++, &sz, px, py, e->depth_fp);
   }
 
   /* Pass 2: SHOTS. */
@@ -756,7 +755,7 @@ void render_sprites(void)
     if (e->type != E_SHOT || n >= SPR_MAX) continue;
     s16 px = web_pixel_x(e->lane, e->depth_fp);
     s16 py = web_pixel_y(e->lane, e->depth_fp);
-    emit_sprite(spr_buf, n++, &SHOT_SIZE, px, py);
+    emit_sprite_depth(spr_buf, n++, &SHOT_SIZE, px, py, e->depth_fp);
   }
 
   /* Pass 3: FLIPPERS, depth-scaled. */
@@ -765,7 +764,7 @@ void render_sprites(void)
     s16 px = web_pixel_x(e->lane, e->depth_fp);
     s16 py = web_pixel_y(e->lane, e->depth_fp);
     u8 size_idx = (e->depth_fp < 0x8000) ? 0 : 1;
-    emit_sprite(spr_buf, n++, &FLIPPER_SIZES[size_idx], px, py);
+    emit_sprite_depth(spr_buf, n++, &FLIPPER_SIZES[size_idx], px, py, e->depth_fp);
   }
 
   if (n == 0) {
