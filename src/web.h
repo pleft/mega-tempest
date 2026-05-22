@@ -58,6 +58,13 @@ void web_dma_main_to_vram(void);
 void web_paint_plane_b(void);
 void web_clear_plane_b(void);
 
+/* ASIC-side variant: render the current web at 128x128 scale into the
+ * given buffer (must be at least 128*128/2 = 8192 bytes, in standard
+ * VDP 8x8 tile format = 16x16 cells x 32 bytes each).
+ * The web is rendered with proportional vanish offset so it fits the
+ * 128x128 without clipping. */
+void web_render_for_asic(u8 * buf, u8 pal);
+
 /* Exposed for the ASIC stamp packer in mcd.c via getter — keep array
  * static internally to match MC-T15 exact linkage. */
 #define WEB_BUF_CELLS 26
@@ -69,7 +76,13 @@ void load_sprite_tiles_to_vram(void);
 
 /* Walk the entity active-list and write the VDP sprite attribute table.
  * Player + shots + flippers all rendered as hardware sprites.
- * Player goes first in the chain so it draws on top. */
+ * Player goes first in the chain so it draws on top.
+ *
+ * Sprite positions are offset by (-g_cam_x, -g_cam_y) so they track the
+ * ASIC's per-frame web shift (which samples source at +tilt = visible web
+ * shifts by -tilt). Set the camera before calling each frame. */
+extern s16 g_cam_x;
+extern s16 g_cam_y;
 void render_sprites(void);
 
 /* Rolling-claw animation + position slide. Player has 16 pre-rotated

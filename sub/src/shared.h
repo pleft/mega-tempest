@@ -7,5 +7,6 @@
 #define CMD_RENDER_ROT 3   /* Run the ASIC stamp/map engine, identity transform */
 #define CMD_PLAY_SFX   4   /* COMCMD1 low byte = SFX index (0=FIRE, 1=HIT, 2=DEATH) */
 #define CMD_RENDER_WARP 5  /* Run the ASIC stamp/map engine, perspective dx-per-line */
+#define CMD_RENDER_TILT 6  /* ASIC with x/y shear; COMCMD1=tilt_x, COMCMD2=tilt_y (signed pixels, at top of IMG) */
 
 #endif

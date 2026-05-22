@@ -494,8 +494,8 @@ static const int8_t WEB_RIM[16][2] = {
 #define ASIC_STAMP_MAP_OFF   0x10000
 #define ASIC_TRACE_OFF       0x20000
 #define ASIC_IMG_OFF         0x30000
-#define ASIC_IMG_W           128
-#define ASIC_IMG_H           128
+#define ASIC_IMG_W           160
+#define ASIC_IMG_H           160
 
 #define GA_MASK_STAMPSIZE_REPEAT      0x01
 #define GA_MASK_STAMPSIZE_32x32_STAMP 0x02
@@ -526,6 +526,32 @@ static void render_rot(void)
   for (uint16_t L = 0; L < ASIC_IMG_H; ++L) {
     trace[L].x  = 0;
     trace[L].y  = (int16_t) (L << 3);
+    trace[L].dx = (int16_t) 0x0800;
+    trace[L].dy = 0;
+  }
+  asic_kick();
+  grant_2m_sub();
+}
+
+/* 32/16 → 16 signed divide via 68000 divs.w — keeps us off __divsi3. */
+static inline int16_t div_s32_s16(int32_t num, int16_t den)
+{
+  int32_t t = num;
+  asm ("divs.w %1, %0" : "+d"(t) : "d"(den) : "cc");
+  return (int16_t) t;
+}
+
+/* Camera pan only — identity zoom (dx=1.0). Per-line dx variation
+ * shifts the visible rim position in IMG which decouples it from the
+ * sprite positions, so we keep dx flat. */
+static void render_tilt(int16_t tilt_x, int16_t tilt_y)
+{
+  wait_2m_sub();
+  asic_trace * trace = (asic_trace *) (WORD_RAM_SUB + ASIC_TRACE_OFF);
+  int16_t const tilt_x_fp = (int16_t) (tilt_x << 3);
+  for (uint16_t L = 0; L < ASIC_IMG_H; ++L) {
+    trace[L].x  = tilt_x_fp;
+    trace[L].y  = (int16_t) (((int16_t) L + tilt_y) << 3);
     trace[L].dx = (int16_t) 0x0800;
     trace[L].dy = 0;
   }
@@ -716,6 +742,12 @@ __attribute__((section(".init"))) void main()
       case CMD_RENDER_WARP:
         render_warp();
         break;
+      case CMD_RENDER_TILT: {
+        int16_t tilt_x = (int16_t) *ga_reg_comcmd1;
+        int16_t tilt_y = (int16_t) *ga_reg_comcmd2;
+        render_tilt(tilt_x, tilt_y);
+        break;
+      }
 
       case CMD_PLAY_SFX:
         sfx_play((uint8_t) (*ga_reg_comcmd1 & 0xFF));

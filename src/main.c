@@ -254,10 +254,16 @@ static void install_playfield(void)
     mcd_wait_ack(CMD_PLAY_MOD);
     g_music_playing = 1;
 
-    /* DIAGNOSTIC: skip software web rendering so plane B is blank
-     * (= we see only the ASIC content on plane A, no plane B web
-     * showing through). Re-enable for normal play. */
-    web_clear_plane_b();
+    /* Render web through ASIC pipeline onto plane B (tile_base 0x280,
+     * paint at plane (10, 4) for 20x20 cells = 160x160 web centred on
+     * screen (160, 112)). */
+    mcd_asic_load_web_stamps(4);     /* yellow lane lines */
+    mcd_render_asic(0x4000, 0x280, 10, 4, 0);
+  } else {
+    /* No Mega CD: fall back to software-rendered web. */
+    web_render_main(4);
+    web_dma_main_to_vram();
+    web_paint_plane_b();
   }
 
   load_sprite_tiles_to_vram();
@@ -439,60 +445,27 @@ static void play_main_thread(void)
   plane_putc(34, 27, (char) ('0' + (s % 10)));
 
 
-  /* All entities (player, shots, flippers) render via VDP hardware sprites. */
+  /* Dynamic perspective camera every frame at 60Hz. 160x160 ASIC IMG
+   * is ~7ms DMA + ~5ms ASIC kick, fits in a frame. */
+  if (g_mcd_present) {
+    s16 px = web_pixel_x(g_player_lane, FP_ONE);
+    s16 py = web_pixel_y(g_player_lane, FP_ONE);
+    s16 cx = (s16) ((px - 160) >> 3);
+    s16 cy = (s16) ((py - 112) >> 3);
+    if (cx > 5)  cx = 5;       /* margin for 160x160 scale-5/4 web is 5px */
+    if (cx < -5) cx = -5;
+    if (cy > 5)  cy = 5;
+    if (cy < -5) cy = -5;
+    g_cam_x = cx;
+    g_cam_y = cy;
+    mcd_render_asic_tilt(0x4000, 0x280, 10, 4, g_cam_x, g_cam_y);
+  } else {
+    g_cam_x = 0;
+    g_cam_y = 0;
+  }
+
+  /* Sprites render with g_cam_x/y applied so they track the visible web. */
   render_sprites();
-
-  /* MC-T16 Phase B (post-revival): C = identity render, DOWN = warp render.
-   * Both load Sega-character stamps, fire the ASIC, repack the IMG buffer
-   * (byte-pair swap), DMA to VRAM tile $280, and paint plane B col-major
-   * over the web tile range (cell (12, 6)..(27, 21)). */
-  if ((p1_single & PAD_C) && g_mcd_present) {
-    mcd_asic_load_stamps();
-    mcd_render_asic(0x4000, 0x280, 12, 6, 0);   /* plane B, identity */
-  }
-  if ((p1_single & PAD_DOWN) && g_mcd_present) {
-    mcd_asic_load_stamps();
-    mcd_render_asic(0x4000, 0x280, 12, 6, 1);   /* plane B, warp */
-  }
-  /* UP: hex-dump diagnostic. Single yellow pixel at source (3, 5).
-   * After render, scan IMG buffer and dump offsets of non-gray bytes
-   * to plane A text. */
-  if ((p1_single & PAD_UP) && g_mcd_present) {
-    mcd_asic_load_tempest_test_stamp();
-    mcd_render_asic(0x2000, 0x600, 12, 6, 0);   /* plane A, IDENTITY */
-
-    /* Scan IMG buffer at WR+$30000 (main view = $630000). Find first
-     * 8 byte offsets where the byte != 0xFF (= gray = palette 15).
-     * Each non-gray byte = yellow pixel(s) landing somewhere. */
-    {
-      volatile u8 const * img = (volatile u8 const *) 0x630000;
-      static const char hex[] = "0123456789ABCDEF";
-      u16 found = 0;
-      vdp_ctrl_32 = plane_xy(2, 3);
-      print("DUMP:", plane_xy(2, 3));
-      vdp_ctrl_32 = plane_xy(2, 4);
-      /* List first 8 non-gray byte offsets + values. */
-      for (u32 i = 0; i < 8192 && found < 8; ++i) {
-        if (img[i] != 0xFF) {
-          /* Print offset (5 hex digits) + ":" + byte (2 hex) + " " */
-          u32 off = i;
-          vdp_data = hex[(off >> 16) & 0xF];
-          vdp_data = hex[(off >> 12) & 0xF];
-          vdp_data = hex[(off >>  8) & 0xF];
-          vdp_data = hex[(off >>  4) & 0xF];
-          vdp_data = hex[(off >>  0) & 0xF];
-          vdp_data = ':';
-          vdp_data = hex[(img[i] >> 4) & 0xF];
-          vdp_data = hex[img[i] & 0xF];
-          vdp_data = ' ';
-          found++;
-          /* Skip ahead 1 byte to avoid printing every byte in a run.
-           * But also we want to see multiple instances of the yellow
-           * pixel since it's tiled 4x4. Keep i increment as default. */
-        }
-      }
-    }
-  }
 
   if (p1_single & PAD_B) install_title();
 }

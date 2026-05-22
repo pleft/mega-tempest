@@ -36,7 +36,7 @@
  * outer rim's centre — you're looking slightly down into the playfield).
  * Positive = downward; for a Tempest-style "look down the tube" we use
  * negative = inner shape lifted upward. */
-#define WEB_VANISH_OFFSET_Y  (-25)
+#define WEB_VANISH_OFFSET_Y  0
 
 /* Sprite-tile VRAM slots (data from src/sprites.{c,h}, baked by
  * tools/extract_mcd_sprites.py from tempest2k-source/src/obj2d.s).
@@ -107,13 +107,14 @@ static const s8 CLAW_DIR_Y[16] = {
    64,  59,  45,  25,   0, -25, -45, -59,
 };
 
-/* Scale base-radius-60 shape-table coords → render radius 100 (v * 5/3).
+/* Scale base-radius-60 shape-table coords → render radius 75 (v * 5/4),
+ * matching the 160x160 ASIC IMG size (5 stamps × 32 px = 160 px).
  * Uses inline divs.w to avoid pulling __divsi3 from libgcc. */
 static inline s16 web_scale(s8 v)
 {
   s32 t = (s32) v * 5;
-  s16 three = 3;
-  asm ("divs.w %1, %0" : "+d"(t) : "d"(three) : "cc");
+  s16 four = 4;
+  asm ("divs.w %1, %0" : "+d"(t) : "d"(four) : "cc");
   return (s16) t;
 }
 
@@ -381,21 +382,44 @@ s16 web_pixel_y(u8 lane, fp16 depth_fp)
   return (s16) (g_lane_mid_inner_y[lane] + ((dy * depth_fp) >> 16));
 }
 
-// ---- Web rasterisation (main-RAM buffer) ----------------------------------
+// ---- Web rasterisation (parametric on target buffer + dimensions) --------
+//
+// All rasterisation functions take a WebCfg* so the same code path works
+// for both the 208x208 software web (default) and the 128x128 ASIC
+// pre-render (mcd.c's web_render_for_asic). Inline ptr-indirect access
+// is a minor perf cost vs the previous static-buffer version.
 
-static void web_setpx(s16 x, s16 y, u8 pal)
+typedef struct {
+  u8 * buf;          /* destination buffer */
+  s16 img_w;         /* pixel width  (= cells_w * 8) */
+  s16 img_h;         /* pixel height (= cells_h * 8) */
+  u8  cells_w;       /* tile columns */
+  s16 vanish_y;      /* inner-rim y offset (Tempest-style "tunnel up") */
+  s16 scale_num;     /* scale factor: rendered = base * scale_num / scale_den */
+  s16 scale_den;
+} WebCfg;
+
+static inline s16 web_scale_c(WebCfg const * c, s8 v)
 {
-  if ((u16) x >= WEB_IMG_W || (u16) y >= WEB_IMG_H) return;
-  u16 cell_off = (u16) ((y >> 3) * WEB_CELLS_W + (x >> 3)) * 32;
+  s32 t = (s32) v * c->scale_num;
+  s16 den = c->scale_den;
+  asm ("divs.w %1, %0" : "+d"(t) : "d"(den) : "cc");
+  return (s16) t;
+}
+
+static void web_setpx_c(WebCfg const * c, s16 x, s16 y, u8 pal)
+{
+  if ((u16) x >= (u16) c->img_w || (u16) y >= (u16) c->img_h) return;
+  u16 cell_off = (u16) ((y >> 3) * c->cells_w + (x >> 3)) * 32;
   u16 byte_off = (u16) ((y & 7) * 4 + ((x & 7) >> 1));
-  u8 * dst = g_web_buf + cell_off + byte_off;
+  u8 * dst = c->buf + cell_off + byte_off;
   if (x & 1)
     *dst = (u8) ((*dst & 0xF0) | (pal & 0x0F));
   else
     *dst = (u8) ((*dst & 0x0F) | ((pal & 0x0F) << 4));
 }
 
-static void web_line(s16 x0, s16 y0, s16 x1, s16 y1, u8 pal)
+static void web_line_c(WebCfg const * c, s16 x0, s16 y0, s16 x1, s16 y1, u8 pal)
 {
   s16 dx =  (s16) ((x1 > x0) ? (x1 - x0) : (x0 - x1));
   s16 dy = -(s16) ((y1 > y0) ? (y1 - y0) : (y0 - y1));
@@ -403,7 +427,7 @@ static void web_line(s16 x0, s16 y0, s16 x1, s16 y1, u8 pal)
   s16 sy = (y0 < y1) ? 1 : -1;
   s16 err = dx + dy;
   while (1) {
-    web_setpx(x0, y0, pal);
+    web_setpx_c(c, x0, y0, pal);
     if (x0 == x1 && y0 == y1) break;
     s16 e2 = (s16) (err << 1);
     if (e2 >= dy) { err += dy; x0 = (s16) (x0 + sx); }
@@ -419,8 +443,6 @@ static inline s16 div_s32_s16(s32 num, s16 den)
   return (s16) t;
 }
 
-/* Compute x where a line from (px0,py0) to (px1,py1) crosses horizontal
- * row y. Returns false if y is outside [min(py0,py1), max(py0,py1)). */
 static u8 edge_x_at_y(s16 px0, s16 py0, s16 px1, s16 py1, s16 y, s16 * out_x)
 {
   s16 ymin = py0 < py1 ? py0 : py1;
@@ -432,11 +454,9 @@ static u8 edge_x_at_y(s16 px0, s16 py0, s16 px1, s16 py1, s16 y, s16 * out_x)
   return 1;
 }
 
-/* Scanline-fill a convex quadrilateral with the given palette index.
- * Vertices listed in order (CW or CCW), all 4 edges considered per row.
- * Used to paint each lane segment between adjacent radial lines. */
-static void web_fill_quad(s16 x0, s16 y0, s16 x1, s16 y1,
-                          s16 x2, s16 y2, s16 x3, s16 y3, u8 pal)
+static void web_fill_quad_c(WebCfg const * c,
+                            s16 x0, s16 y0, s16 x1, s16 y1,
+                            s16 x2, s16 y2, s16 x3, s16 y3, u8 pal)
 {
   s16 ymin = y0;
   if (y1 < ymin) ymin = y1;
@@ -447,7 +467,7 @@ static void web_fill_quad(s16 x0, s16 y0, s16 x1, s16 y1,
   if (y2 > ymax) ymax = y2;
   if (y3 > ymax) ymax = y3;
   if (ymin < 0) ymin = 0;
-  if (ymax >= WEB_IMG_H) ymax = WEB_IMG_H - 1;
+  if (ymax >= c->img_h) ymax = (s16) (c->img_h - 1);
 
   for (s16 y = ymin; y <= ymax; ++y) {
     s16 xs[4];
@@ -463,8 +483,8 @@ static void web_fill_quad(s16 x0, s16 y0, s16 x1, s16 y1,
       if (xs[i] > rx) rx = xs[i];
     }
     if (lx < 0) lx = 0;
-    if (rx >= WEB_IMG_W) rx = WEB_IMG_W - 1;
-    for (s16 x = lx; x <= rx; ++x) web_setpx(x, y, pal);
+    if (rx >= c->img_w) rx = (s16) (c->img_w - 1);
+    for (s16 x = lx; x <= rx; ++x) web_setpx_c(c, x, y, pal);
   }
 }
 
@@ -477,26 +497,30 @@ static void web_fill_quad(s16 x0, s16 y0, s16 x1, s16 y1,
 #define WEB_FILL_PAL_2  7
 #define WEB_FILL_PAL_3  8      /* brightest, at depth 3/4..1 (outer rim) */
 
-void web_render_main(u8 pal)
+/* Parametric core. Renders the current web shape into cfg->buf at the
+ * cfg's specified scale + dimensions. Used by both web_render_main
+ * (208x208 software web) and web_render_for_asic (128x128 ASIC web). */
+static void web_render_to(WebCfg const * cfg, u8 pal)
 {
   const s8 (*rim)[2] = WEB_RIMS[g_web_shape];
-  u8 const V = WEB_LANE_COUNT[g_web_shape];        /* vertex count = N */
-  u8 const S = g_shape_closed ? V : (u8) (V - 1);  /* number of lane segments */
-  for (u16 i = 0; i < WEB_BUF_BYTES; ++i) g_web_buf[i] = 0;
-  s16 const cx = WEB_IMG_W / 2;
-  s16 const cy = WEB_IMG_H / 2;
+  u8 const V = WEB_LANE_COUNT[g_web_shape];
+  u8 const S = g_shape_closed ? V : (u8) (V - 1);
 
-  /* Precompute line-endpoint positions for all V boundary lines, both
-   * the inner (vanishing-end) and outer (rim) corners. The inner end is
-   * at 1/8 scale and lifted by WEB_VANISH_OFFSET_Y for the perspective. */
+  /* Zero the buffer. */
+  u16 buf_bytes = (u16) (cfg->cells_w * (cfg->img_h / 8) * 32);
+  for (u16 i = 0; i < buf_bytes; ++i) cfg->buf[i] = 0;
+
+  s16 const cx = (s16) (cfg->img_w / 2);
+  s16 const cy = (s16) (cfg->img_h / 2);
+
   s16 ox[MAX_LANES], oy[MAX_LANES], ix[MAX_LANES], iy[MAX_LANES];
   for (u8 k = 0; k < V; ++k) {
-    s16 sx = web_scale(rim[k][0]);
-    s16 sy = web_scale(rim[k][1]);
+    s16 sx = web_scale_c(cfg, rim[k][0]);
+    s16 sy = web_scale_c(cfg, rim[k][1]);
     ox[k] = (s16) (cx + sx);
     oy[k] = (s16) (cy + sy);
     ix[k] = (s16) (cx + (sx >> 3));
-    iy[k] = (s16) (cy + (sy >> 3) + WEB_VANISH_OFFSET_Y);
+    iy[k] = (s16) (cy + (sy >> 3) + cfg->vanish_y);
   }
 
   /* 1. FILL each lane segment with a 4-band depth gradient. */
@@ -521,30 +545,69 @@ void web_render_main(u8 pal)
       s16 y_j_lo = (s16) (iy[j] + ((dyj * lo) >> 4));
       s16 x_j_hi = (s16) (ix[j] + ((dxj * hi) >> 4));
       s16 y_j_hi = (s16) (iy[j] + ((dyj * hi) >> 4));
-      web_fill_quad(x_k_lo, y_k_lo,
-                    x_k_hi, y_k_hi,
-                    x_j_hi, y_j_hi,
-                    x_j_lo, y_j_lo, BAND_PAL[b]);
+      web_fill_quad_c(cfg, x_k_lo, y_k_lo,
+                           x_k_hi, y_k_hi,
+                           x_j_hi, y_j_hi,
+                           x_j_lo, y_j_lo, BAND_PAL[b]);
     }
   }
 
   /* 2. Radial lines (one per vertex). */
   for (u8 k = 0; k < V; ++k)
-    web_line(ix[k], iy[k], ox[k], oy[k], pal);
+    web_line_c(cfg, ix[k], iy[k], ox[k], oy[k], pal);
 
-  /* 3. Outer rim polygon — only S segments (no wrap on open shapes). */
+  /* 3. Outer rim polygon. */
   for (u8 k = 0; k < S; ++k) {
     u8 j = (u8) (k + 1);
     if (j >= V) j = 0;
-    web_line(ox[k], oy[k], ox[j], oy[j], pal);
+    web_line_c(cfg, ox[k], oy[k], ox[j], oy[j], pal);
   }
 
-  /* 4. Inner rim polygon — same N-1 / N. */
+  /* 4. Inner rim polygon. */
   for (u8 k = 0; k < S; ++k) {
     u8 j = (u8) (k + 1);
     if (j >= V) j = 0;
-    web_line(ix[k], iy[k], ix[j], iy[j], pal);
+    web_line_c(cfg, ix[k], iy[k], ix[j], iy[j], pal);
   }
+}
+
+void web_render_main(u8 pal)
+{
+  static const WebCfg cfg = {
+    .buf       = NULL,       /* set at runtime to g_web_buf */
+    .img_w     = WEB_IMG_W,
+    .img_h     = WEB_IMG_H,
+    .cells_w   = WEB_CELLS_W,
+    .vanish_y  = WEB_VANISH_OFFSET_Y,
+    .scale_num = 5,          /* base 60 → 75 (radius 75 fits 160x160 ASIC) */
+    .scale_den = 4,
+  };
+  /* Patch buf at runtime since g_web_buf is in BSS (not a constant
+   * expression for static init). */
+  WebCfg cfg_local = cfg;
+  cfg_local.buf = g_web_buf;
+  web_render_to(&cfg_local, pal);
+}
+
+/* ASIC-side variant: renders the web into a 128x128 buffer at smaller
+ * scale so the entire web fits without clipping. mcd.c packs the result
+ * into 16 ASIC stamps. */
+void web_render_for_asic(u8 * buf, u8 pal)
+{
+  WebCfg cfg = {
+    .buf       = buf,
+    .img_w     = 128,
+    .img_h     = 128,
+    .cells_w   = 16,
+    /* For 128x128 buffer: center at (64,64), want rim to fit with small
+     * margin. Base radius 60 (rim table) scaled by 1/1 = 60 → rim at
+     * y=4..124. Inner rim at 60/8 ≈ 7 → inner rim near center.
+     * Vanish offset proportional: -25 * 128/208 ≈ -15. */
+    .vanish_y  = -15,
+    .scale_num = 1,
+    .scale_den = 1,
+  };
+  web_render_to(&cfg, pal);
 }
 
 void web_dma_main_to_vram(void)
@@ -632,13 +695,19 @@ void load_sprite_tiles_to_vram(void)
   }
 }
 
+/* Camera offset applied to every sprite — set by main each frame from the
+ * same value sent to the ASIC tilt. Sprites shift opposite the source
+ * sampling so they stay glued to the visible rim/lanes. */
+s16 g_cam_x = 0;
+s16 g_cam_y = 0;
+
 static inline void emit_sprite(u16 * buf, u8 idx, const SpriteSizeDef * sz,
                                s16 px, s16 py)
 {
-  buf[idx * 4 + 0] = (u16) (py + 128 - sz->half);                     /* Y */
+  buf[idx * 4 + 0] = (u16) (py - g_cam_y + 128 - sz->half);           /* Y */
   buf[idx * 4 + 1] = (u16) (((u16) sz->size_byte << 8) | (idx + 1));  /* size + link */
   buf[idx * 4 + 2] = sz->tile_base;                                   /* tile */
-  buf[idx * 4 + 3] = (u16) (px + 128 - sz->half);                     /* X */
+  buf[idx * 4 + 3] = (u16) (px - g_cam_x + 128 - sz->half);           /* X */
 }
 
 void render_sprites(void)

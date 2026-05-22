@@ -177,6 +177,41 @@ static void write_tempest_stamp(volatile u8 * dst32x32_512)
   }
 }
 
+/* DIAGNOSTIC: writes 4 solid-colour stamps and a map that uses
+ * mr*16+mc indexing to place stamp 1 (white) at "row 0", stamp 2 (red)
+ * at "row 1", stamp 4 (yellow) at "row 2", stamp 5 (navy) at "row 3".
+ *
+ * If ASIC really uses 16-wide row-major map: image shows W/R/Y/N
+ * in 4 horizontal bands.
+ * If 8-wide col-major: only W and Y visible in vertical strips
+ * (since R and N indices go beyond col=3). */
+void mcd_asic_load_map_diagnostic(void)
+{
+  wait_2m_main_to(0x80000);
+
+  /* Solid-colour stamps at slots 1, 2, 4, 5. */
+  static u8 const STAMP_SLOTS[4] = {1, 2, 4, 5};
+  static u8 const STAMP_PALS[4]  = {1, 2, 4, 5};
+  for (u8 i = 0; i < 4; ++i) {
+    u8 pal = STAMP_PALS[i];
+    u8 byte_fill = (u8) ((pal << 4) | pal);
+    volatile u8 * stamp = (volatile u8 *) (WR_MAIN + STAMP_SLOTS[i] * 0x200);
+    for (u16 b = 0; b < 512; ++b) stamp[b] = byte_fill;
+  }
+
+  /* Map: row 0 = stamp 1, row 1 = stamp 2, row 2 = stamp 4, row 3 = stamp 5.
+   * Use SAME indexing as web: map_buf[mr*16+mc] for mc=0..3 mr=0..3. */
+  static u16 map_buf[256];
+  for (u16 i = 0; i < 256; ++i) map_buf[i] = 0;
+  for (u8 mc = 0; mc < 4; ++mc) {
+    map_buf[0 * 16 + mc] = (u16) (STAMP_SLOTS[0] * 4);  /* mr=0 → stamp 1 */
+    map_buf[1 * 16 + mc] = (u16) (STAMP_SLOTS[1] * 4);  /* mr=1 → stamp 2 */
+    map_buf[2 * 16 + mc] = (u16) (STAMP_SLOTS[2] * 4);  /* mr=2 → stamp 4 */
+    map_buf[3 * 16 + mc] = (u16) (STAMP_SLOTS[3] * 4);  /* mr=3 → stamp 5 */
+  }
+  copy_words((const char *) map_buf, (volatile u16 *) WR_STAMP_MAP, 512);
+}
+
 void mcd_asic_load_tempest_test_stamp(void)
 {
   wait_2m_main_to(0x80000);
@@ -288,19 +323,19 @@ static void web_buf_dilate(u8 * buf, u8 line_pal)
 
 void mcd_asic_load_web_stamps(u8 line_pal)
 {
-  /* (1) Render web into main-RAM buffer (does NOT DMA — that step is left
-   *     to the regular software-web pipeline if both layers want to coexist). */
+  /* Render 208x208 software web into g_web_buf (26x26 cells) at scale
+   * 5/4 → web rim radius 75 → web spans buffer pixels (29..179). */
   web_render_main(line_pal);
-  /* No workarounds; once the ASIC pipeline is fixed properly, dilation
-   * won't be necessary. */
 
-  /* (2) Wait for WR ownership, then extract + pack. */
   wait_2m_main_to(0x80000);
 
-  enum { EXTRACT_OFFSET = 5 };           /* center of 26x26, want 16 → start at 5 */
-  for (u8 mc = 0; mc < 4; ++mc) {
-    for (u8 mr = 0; mr < 4; ++mr) {
-      u8 stamp_idx = (u8) (mc * 4 + mr + 1);              /* 1..16 */
+  /* Pack 5x5 = 25 stamps from g_web_buf cells (3..22) — the centre
+   * 160x160 region (buffer pixels 24..183) which contains the full
+   * scale-5/4 web with 5px margin for camera pan. */
+  enum { EXTRACT_OFFSET = 3 };
+  for (u8 mc = 0; mc < 5; ++mc) {
+    for (u8 mr = 0; mr < 5; ++mr) {
+      u8 stamp_idx = (u8) (mc * 5 + mr + 1);          /* 1..25 */
       volatile u8 * stamp = (volatile u8 *) (WR_MAIN + stamp_idx * 0x200);
       for (u8 t = 0; t < 16; ++t) {
         u8 in_col = t >> 2;
@@ -315,17 +350,66 @@ void mcd_asic_load_web_stamps(u8 line_pal)
     }
   }
 
-  /* (3) Stamp map: 4x4 top-left cells reference stamps, rest = 0. */
+  /* Stamp map: 5x5 grid at (col=0..4, row=0..4) — 8-wide row-major. */
   static u16 map_buf[256];
   for (u16 i = 0; i < 256; ++i) map_buf[i] = 0;
-  for (u8 mc = 0; mc < 4; ++mc) {
-    for (u8 mr = 0; mr < 4; ++mr) {
-      u8 stamp_idx = (u8) (mc * 4 + mr + 1);
-      /* Map index = data_offset / $80 = (stamp_idx * $200) / $80 = stamp_idx*4 */
-      map_buf[mr * 16 + mc] = (u16) (stamp_idx * 4);
+  for (u8 mc = 0; mc < 5; ++mc) {
+    for (u8 mr = 0; mr < 5; ++mr) {
+      u8 stamp_idx = (u8) (mc * 5 + mr + 1);
+      map_buf[mr * 8 + mc] = (u16) (stamp_idx * 4);
     }
   }
   copy_words((const char *) map_buf, (volatile u16 *) WR_STAMP_MAP, 512);
+}
+
+/* DIAGNOSTIC: write the centre 16x16 cells of g_web_buf DIRECTLY into the
+ * IMG buffer in COL-MAJOR tile order (skip the ASIC engine entirely),
+ * then DMA + col-major paint via the same backend as mcd_render_asic.
+ *
+ * IMG tile (col, row) at WR_IMG_BUF + (col*16 + row)*32, matching the
+ * paint formula `tile_base + col*16 + row`. Each tile takes 32 bytes
+ * from g_web_buf cell (5+col, 5+row).
+ *
+ * This pinpoints whether the split-halves artefact lives in the ASIC
+ * engine (stamp→IMG) or in our software web/extraction. */
+void mcd_render_web_direct(u8 line_pal, u16 plane_vram_addr, u16 tile_base,
+                           u8 plane_x, u8 plane_y)
+{
+  web_render_main(line_pal);
+
+  wait_2m_main_to(0x80000);
+
+  /* (1) Pack the centre 16x16 cells into IMG buffer, ROW-MAJOR tile order
+   *     to match the ASIC's empirical layout. */
+  enum { EXTRACT_OFFSET = 5 };
+  for (u8 row = 0; row < 16; ++row) {
+    for (u8 col = 0; col < 16; ++col) {
+      u8 src_gc = (u8) (EXTRACT_OFFSET + col);
+      u8 src_gr = (u8) (EXTRACT_OFFSET + row);
+      u16 src_off = (u16) ((u16) src_gr * WEB_BUF_CELLS + src_gc) * 32;
+      u16 dst_off = (u16) (((u16) row * 16 + col) * 32);
+      u8 const * src = web_get_buf() + src_off;
+      volatile u8 * dst = WR_IMG_BUF + dst_off;
+      for (u8 b = 0; b < 32; ++b) dst[b] = src[b];
+    }
+  }
+
+  /* (2) DMA + paint — identical to mcd_render_asic's tail, including the
+   *     BIOS DMA workaround. */
+  u16 mode2_reg = vdp_regs[1];
+  vdp_ctrl = mode2_reg | VDP_DMA_ENABLE;
+  vdp_dma_transfer((char const *) (WR_IMG_BUF + 2),
+                   to_vdp_addr(tile_base * 32) | VRAM_W, 4096);
+  vdp_ctrl = mode2_reg;
+  vdp_ctrl_32 = to_vdp_addr(tile_base * 32) | VRAM_W;
+  vdp_data_32 = *((volatile u32 const *) WR_IMG_BUF);
+
+  for (u8 row = 0; row < 16; ++row) {
+    vdp_ctrl_32 = to_vdp_addr(plane_vram_addr + ((plane_y + row) * 64 + plane_x) * 2) | VRAM_W;
+    for (u8 col = 0; col < 16; ++col) {
+      vdp_data = (u16) (tile_base + row * 16 + col);
+    }
+  }
 }
 
 /* RAW passthrough — no transformation. Use this to see the unmodified
@@ -337,12 +421,12 @@ static void repack_img_buf(void)
   for (u16 i = 0; i < 8192; ++i) dst[i] = src[i];
 }
 
-/* Full ASIC render pipeline. plane_vram_addr selects which plane gets
- * painted (0x2000 = plane A, 0x4000 = plane B). */
-void mcd_render_asic(u16 plane_vram_addr, u16 tile_base, u8 plane_x, u8 plane_y, u8 warp)
+/* Common ASIC render tail: kick sub, wait for completion, DMA + paint.
+ * `cmd` is the CMD_RENDER_* code already loaded with whatever extra params
+ * (COMCMD1/2) were set by the caller. */
+static void asic_render_kick_and_paint(u16 cmd, u16 plane_vram_addr,
+                                       u16 tile_base, u8 plane_x, u8 plane_y)
 {
-  u16 cmd = warp ? CMD_RENDER_WARP : CMD_RENDER_ROT;
-
   /* Hand WR to sub. */
   grant_2m_main_to(0x80000);
   *GA_REG_COMCMD0_W = cmd;
@@ -351,33 +435,37 @@ void mcd_render_asic(u16 plane_vram_addr, u16 tile_base, u8 plane_x, u8 plane_y,
   while (*GA_REG_COMSTAT0_W != 0) ;
   wait_2m_main_to(0x80000);
 
-  /* IMG buffer is in standard VDP tile format. Use the BIOS DMA workaround
-   * for the Mega CD WR DMA hardware bug: start DMA from source + 2 bytes,
-   * then manually write the first long word via VDP_DATA. From BIOS
-   * disassembly (dmaTransferToVramWithRewrite, ROM:000002D4). */
+  /* BIOS DMA workaround for Mega CD WR→VRAM hardware bug.
+   * 160x160 IMG = 12800 bytes = 6400 words. */
   u16 mode2_reg = vdp_regs[1];
   vdp_ctrl = mode2_reg | VDP_DMA_ENABLE;
   vdp_dma_transfer((char const *) (WR_IMG_BUF + 2),
-                   to_vdp_addr(tile_base * 32) | VRAM_W, 4096);
+                   to_vdp_addr(tile_base * 32) | VRAM_W, 6400);
   vdp_ctrl = mode2_reg;
-  /* Rewrite the first long word at VRAM tile_base via direct VDP_DATA. */
   vdp_ctrl_32 = to_vdp_addr(tile_base * 32) | VRAM_W;
   vdp_data_32 = *((volatile u32 const *) WR_IMG_BUF);
 
-  /* Paint plane COL-MAJOR: tile = col*16 + row. The ASIC IMG buffer is
-   * stored in COL-MAJOR cell arrangement per Genesis Plus GX source
-   * (gfx.c line 595: bufferOffset = (vsize+1)*64-7, meaning each cell
-   * column occupies (vsize+1)*32 bytes contiguously). Tile (col, row)
-   * lives at byte offset (col * (H/8) + row) * 32.
-   *
-   * (My earlier "row-major" interpretation was wrong — the single-pixel
-   * test was symmetric so it couldn't distinguish row vs col-major.) */
-  for (u8 row = 0; row < 16; ++row) {
+  /* Paint plane COL-MAJOR for 20x20 cells: tile = col*20 + row. */
+  for (u8 row = 0; row < 20; ++row) {
     vdp_ctrl_32 = to_vdp_addr(plane_vram_addr + ((plane_y + row) * 64 + plane_x) * 2) | VRAM_W;
-    for (u8 col = 0; col < 16; ++col) {
-      vdp_data = (u16) (tile_base + col * 16 + row);
+    for (u8 col = 0; col < 20; ++col) {
+      vdp_data = (u16) (tile_base + col * 20 + row);
     }
   }
+}
+
+void mcd_render_asic(u16 plane_vram_addr, u16 tile_base, u8 plane_x, u8 plane_y, u8 warp)
+{
+  u16 cmd = warp ? CMD_RENDER_WARP : CMD_RENDER_ROT;
+  asic_render_kick_and_paint(cmd, plane_vram_addr, tile_base, plane_x, plane_y);
+}
+
+void mcd_render_asic_tilt(u16 plane_vram_addr, u16 tile_base,
+                          u8 plane_x, u8 plane_y, s16 tilt_x, s16 tilt_y)
+{
+  *GA_REG_COMCMD1_W = (u16) tilt_x;
+  *GA_REG_COMCMD2_W = (u16) tilt_y;
+  asic_render_kick_and_paint(CMD_RENDER_TILT, plane_vram_addr, tile_base, plane_x, plane_y);
 }
 
 void mcd_wait_ack(u16 expected)
