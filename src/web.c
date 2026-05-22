@@ -22,14 +22,16 @@
  */
 #define ROT_TILE_BASE_IDX  0x280
 #define ROT_TILE_VRAM_ADDR (ROT_TILE_BASE_IDX * 32)
-#define PLANE_B_PAINT_COL  7
-#define PLANE_B_PAINT_ROW  1
+#define PLANE_B_PAINT_COL  10
+#define PLANE_B_PAINT_ROW  4
 
-#define WEB_IMG_W   208
-#define WEB_IMG_H   208
-#define WEB_CELLS_W 26
-#define WEB_CELLS_H 26
-#define WEB_BUF_BYTES (WEB_CELLS_W * WEB_CELLS_H * 32)   /* 21632 bytes */
+/* 160x160 lines-only at scale 5/4 (rim radius 75, 5px margin).
+ * 20x20 cells = 12.8 KB. */
+#define WEB_IMG_W   160
+#define WEB_IMG_H   160
+#define WEB_CELLS_W 20
+#define WEB_CELLS_H 20
+#define WEB_BUF_BYTES (WEB_CELLS_W * WEB_CELLS_H * 32)   /* 12800 bytes */
 
 /* Perspective: the inner "vanishing" shape sits offset from the geometric
  * centre, so the web reads as a tilted tube (vanishing point above the
@@ -107,9 +109,8 @@ static const s8 CLAW_DIR_Y[16] = {
    64,  59,  45,  25,   0, -25, -45, -59,
 };
 
-/* Scale base-radius-60 shape-table coords → render radius 75 (v * 5/4),
- * matching the 160x160 ASIC IMG size (5 stamps × 32 px = 160 px).
- * Uses inline divs.w to avoid pulling __divsi3 from libgcc. */
+/* Scale base-radius-60 shape-table coords → render radius 75 (×5/4),
+ * matching the 160x160 software web (rim 75 fits with 5px margin). */
 static inline s16 web_scale(s8 v)
 {
   s32 t = (s32) v * 5;
@@ -228,41 +229,50 @@ u8 g_web_shape = WEB_SHAPE_V;
 
 // ---- Lane projection ------------------------------------------------------
 
-void web_init(void)
+/* Per-frame rim projection (uses g_vp_x / g_vp_y). Recomputes
+ * g_lane_mid_outer/inner. Must be called before web_render_main
+ * each frame; entity sprites read these via web_pixel_x/y. */
+void web_project(void)
 {
   const s8 (*rim)[2] = WEB_RIMS[g_web_shape];
-  g_lane_count   = WEB_LANE_COUNT[g_web_shape];
-  g_shape_closed = WEB_CLOSED[g_web_shape];
-  u8 const N     = g_lane_count;
+  u8 const V = WEB_LANE_COUNT[g_web_shape];  /* rim vertex count */
 
-  /* Compute the line endpoints (locally — only the lane midpoints
-   * derived from them are stored globally). MAX_LANES is the cap. */
   s16 line_outer_x[MAX_LANES], line_outer_y[MAX_LANES];
   s16 line_inner_x[MAX_LANES], line_inner_y[MAX_LANES];
-  for (u8 i = 0; i < N; ++i) {
+  for (u8 i = 0; i < V; ++i) {
     s16 sx = web_scale(rim[i][0]);
     s16 sy = web_scale(rim[i][1]);
-    line_outer_x[i] = (s16) (WEB_CENTER_X + sx);
-    line_outer_y[i] = (s16) (WEB_CENTER_Y + sy);
-    line_inner_x[i] = (s16) (WEB_CENTER_X + (sx >> 3));
-    line_inner_y[i] = (s16) (WEB_CENTER_Y + WEB_VANISH_OFFSET_Y + (sy >> 3));
+    s16 dx = (s16) (sx - g_vp_x);
+    s16 dy = (s16) (sy - g_vp_y);
+    line_outer_x[i] = (s16) (WEB_CENTER_X + dx);
+    line_outer_y[i] = (s16) (WEB_CENTER_Y + dy);
+    line_inner_x[i] = (s16) (WEB_CENTER_X + (dx >> 3));
+    line_inner_y[i] = (s16) (WEB_CENTER_Y + WEB_VANISH_OFFSET_Y + (dy >> 3));
   }
 
-  /* Lane midpoints = average of adjacent line endpoints. For closed
-   * shapes lane k sits between line k and line (k+1) mod N. For open
-   * shapes (FAN) only lanes 0..N-2 exist, between consecutive lines. */
-  u8 lane_segments = (u8) (g_shape_closed ? N : N - 1);
+  u8 lane_segments = (u8) (g_shape_closed ? V : V - 1);
   for (u8 i = 0; i < lane_segments; ++i) {
     u8 j = (u8) (i + 1);
-    if (j >= N) j = 0;
+    if (j >= V) j = 0;
     g_lane_mid_outer_x[i] = (s16) ((line_outer_x[i] + line_outer_x[j]) >> 1);
     g_lane_mid_outer_y[i] = (s16) ((line_outer_y[i] + line_outer_y[j]) >> 1);
     g_lane_mid_inner_x[i] = (s16) ((line_inner_x[i] + line_inner_x[j]) >> 1);
     g_lane_mid_inner_y[i] = (s16) ((line_inner_y[i] + line_inner_y[j]) >> 1);
   }
-  /* For open shapes, g_lane_count is still N (vertex count) but only
-   * N-1 lanes are real. Player_lane will be clamped to 0..N-2. */
+}
+
+void web_init(void)
+{
+  g_lane_count   = WEB_LANE_COUNT[g_web_shape];
+  g_shape_closed = WEB_CLOSED[g_web_shape];
+  u8 const N     = g_lane_count;
+
+  /* Open shapes: N-1 lanes between N line endpoints. */
+  u8 lane_segments = (u8) (g_shape_closed ? N : N - 1);
   if (!g_shape_closed) g_lane_count = lane_segments;
+
+  /* Initial rim projection at vp = 0. */
+  web_project();
 
   /* Pick the claw rotation that best points from each lane midpoint
    * toward the web's centre via dot-product over the 16 claw orientations. */
@@ -397,6 +407,7 @@ typedef struct {
   s16 vanish_y;      /* inner-rim y offset (Tempest-style "tunnel up") */
   s16 scale_num;     /* scale factor: rendered = base * scale_num / scale_den */
   s16 scale_den;
+  u8  skip_fills;    /* if non-zero, skip the per-lane depth-band fills */
 } WebCfg;
 
 static inline s16 web_scale_c(WebCfg const * c, s8 v)
@@ -407,11 +418,16 @@ static inline s16 web_scale_c(WebCfg const * c, s8 v)
   return (s16) t;
 }
 
-static void web_setpx_c(WebCfg const * c, s16 x, s16 y, u8 pal)
+/* Specialised for 160x160 / cells_w=20 — the rim-line hot path.
+ * Hard-coded dims so gcc replaces `row * 20 * 32 = row * 640` with
+ * shifts (640 = (1<<9)+(1<<7)) instead of the 68k mulu (~70 cycles). */
+static inline void web_setpx_c(WebCfg const * c, s16 x, s16 y, u8 pal)
 {
-  if ((u16) x >= (u16) c->img_w || (u16) y >= (u16) c->img_h) return;
-  u16 cell_off = (u16) ((y >> 3) * c->cells_w + (x >> 3)) * 32;
-  u16 byte_off = (u16) ((y & 7) * 4 + ((x & 7) >> 1));
+  if ((u16) x >= 160 || (u16) y >= 160) return;
+  u16 row_cell = (u16) (y >> 3);
+  u16 cell_off = (u16) ((row_cell << 9) + (row_cell << 7)
+                      + ((u16)(x >> 3) << 5));
+  u16 byte_off = (u16) (((u16)(y & 7) << 2) + ((u16)(x & 7) >> 1));
   u8 * dst = c->buf + cell_off + byte_off;
   if (x & 1)
     *dst = (u8) ((*dst & 0xF0) | (pal & 0x0F));
@@ -513,42 +529,49 @@ static void web_render_to(WebCfg const * cfg, u8 pal)
   s16 const cx = (s16) (cfg->img_w / 2);
   s16 const cy = (s16) (cfg->img_h / 2);
 
+  /* Per-vertex 3D projection (matches web_init). Outer Z=1, inner Z=8.
+   * (vp_x, vp_y) are in world units = same scale as web_scale_c output. */
   s16 ox[MAX_LANES], oy[MAX_LANES], ix[MAX_LANES], iy[MAX_LANES];
   for (u8 k = 0; k < V; ++k) {
     s16 sx = web_scale_c(cfg, rim[k][0]);
     s16 sy = web_scale_c(cfg, rim[k][1]);
-    ox[k] = (s16) (cx + sx);
-    oy[k] = (s16) (cy + sy);
-    ix[k] = (s16) (cx + (sx >> 3));
-    iy[k] = (s16) (cy + (sy >> 3) + cfg->vanish_y);
+    s16 dx = (s16) (sx - g_vp_x);
+    s16 dy = (s16) (sy - g_vp_y);
+    ox[k] = (s16) (cx + dx);
+    oy[k] = (s16) (cy + dy);
+    ix[k] = (s16) (cx + (dx >> 3));
+    iy[k] = (s16) (cy + (dy >> 3) + cfg->vanish_y);
   }
 
-  /* 1. FILL each lane segment with a 4-band depth gradient. */
-  static const u8 BAND_PAL[WEB_FILL_BANDS] = {
-    WEB_FILL_PAL_0, WEB_FILL_PAL_1, WEB_FILL_PAL_2, WEB_FILL_PAL_3,
-  };
-  for (u8 k = 0; k < S; ++k) {
-    u8 j = (u8) (k + 1);
-    if (j >= V) j = 0;
-    s16 dxk = (s16) (ox[k] - ix[k]);
-    s16 dyk = (s16) (oy[k] - iy[k]);
-    s16 dxj = (s16) (ox[j] - ix[j]);
-    s16 dyj = (s16) (oy[j] - iy[j]);
-    for (u8 b = 0; b < WEB_FILL_BANDS; ++b) {
-      s16 lo = (s16) (b << 2);
-      s16 hi = (s16) ((b + 1) << 2);
-      s16 x_k_lo = (s16) (ix[k] + ((dxk * lo) >> 4));
-      s16 y_k_lo = (s16) (iy[k] + ((dyk * lo) >> 4));
-      s16 x_k_hi = (s16) (ix[k] + ((dxk * hi) >> 4));
-      s16 y_k_hi = (s16) (iy[k] + ((dyk * hi) >> 4));
-      s16 x_j_lo = (s16) (ix[j] + ((dxj * lo) >> 4));
-      s16 y_j_lo = (s16) (iy[j] + ((dyj * lo) >> 4));
-      s16 x_j_hi = (s16) (ix[j] + ((dxj * hi) >> 4));
-      s16 y_j_hi = (s16) (iy[j] + ((dyj * hi) >> 4));
-      web_fill_quad_c(cfg, x_k_lo, y_k_lo,
-                           x_k_hi, y_k_hi,
-                           x_j_hi, y_j_hi,
-                           x_j_lo, y_j_lo, BAND_PAL[b]);
+  /* 1. FILL each lane segment with a 4-band depth gradient. Skip when
+   * cfg->skip_fills is set (per-frame dynamic web — too expensive). */
+  if (!cfg->skip_fills) {
+    static const u8 BAND_PAL[WEB_FILL_BANDS] = {
+      WEB_FILL_PAL_0, WEB_FILL_PAL_1, WEB_FILL_PAL_2, WEB_FILL_PAL_3,
+    };
+    for (u8 k = 0; k < S; ++k) {
+      u8 j = (u8) (k + 1);
+      if (j >= V) j = 0;
+      s16 dxk = (s16) (ox[k] - ix[k]);
+      s16 dyk = (s16) (oy[k] - iy[k]);
+      s16 dxj = (s16) (ox[j] - ix[j]);
+      s16 dyj = (s16) (oy[j] - iy[j]);
+      for (u8 b = 0; b < WEB_FILL_BANDS; ++b) {
+        s16 lo = (s16) (b << 2);
+        s16 hi = (s16) ((b + 1) << 2);
+        s16 x_k_lo = (s16) (ix[k] + ((dxk * lo) >> 4));
+        s16 y_k_lo = (s16) (iy[k] + ((dyk * lo) >> 4));
+        s16 x_k_hi = (s16) (ix[k] + ((dxk * hi) >> 4));
+        s16 y_k_hi = (s16) (iy[k] + ((dyk * hi) >> 4));
+        s16 x_j_lo = (s16) (ix[j] + ((dxj * lo) >> 4));
+        s16 y_j_lo = (s16) (iy[j] + ((dyj * lo) >> 4));
+        s16 x_j_hi = (s16) (ix[j] + ((dxj * hi) >> 4));
+        s16 y_j_hi = (s16) (iy[j] + ((dyj * hi) >> 4));
+        web_fill_quad_c(cfg, x_k_lo, y_k_lo,
+                             x_k_hi, y_k_hi,
+                             x_j_hi, y_j_hi,
+                             x_j_lo, y_j_lo, BAND_PAL[b]);
+      }
     }
   }
 
@@ -573,19 +596,17 @@ static void web_render_to(WebCfg const * cfg, u8 pal)
 
 void web_render_main(u8 pal)
 {
-  static const WebCfg cfg = {
-    .buf       = NULL,       /* set at runtime to g_web_buf */
-    .img_w     = WEB_IMG_W,
-    .img_h     = WEB_IMG_H,
-    .cells_w   = WEB_CELLS_W,
-    .vanish_y  = WEB_VANISH_OFFSET_Y,
-    .scale_num = 5,          /* base 60 → 75 (radius 75 fits 160x160 ASIC) */
-    .scale_den = 4,
+  /* Lines-only rasterisation at 160x160, scale 5/4 (rim 75). */
+  WebCfg cfg_local = {
+    .buf        = g_web_buf,
+    .img_w      = WEB_IMG_W,
+    .img_h      = WEB_IMG_H,
+    .cells_w    = WEB_CELLS_W,
+    .vanish_y   = WEB_VANISH_OFFSET_Y,
+    .scale_num  = 5,
+    .scale_den  = 4,
+    .skip_fills = 1,
   };
-  /* Patch buf at runtime since g_web_buf is in BSS (not a constant
-   * expression for static init). */
-  WebCfg cfg_local = cfg;
-  cfg_local.buf = g_web_buf;
   web_render_to(&cfg_local, pal);
 }
 
@@ -695,19 +716,20 @@ void load_sprite_tiles_to_vram(void)
   }
 }
 
-/* Camera offset applied to every sprite — set by main each frame from the
- * same value sent to the ASIC tilt. Sprites shift opposite the source
- * sampling so they stay glued to the visible rim/lanes. */
-s16 g_cam_x = 0;
-s16 g_cam_y = 0;
+/* True-3D camera state. web_init projects rim vertices with vp_x/vp_y
+ * subtracted before the Z divide, so g_lane_mid_outer/inner already
+ * reflect the current camera. web_pixel_x/y returns those projected
+ * screen coords, so sprites use them directly — no per-sprite offset. */
+s16 g_vp_x = 0;
+s16 g_vp_y = 0;
 
 static inline void emit_sprite(u16 * buf, u8 idx, const SpriteSizeDef * sz,
                                s16 px, s16 py)
 {
-  buf[idx * 4 + 0] = (u16) (py - g_cam_y + 128 - sz->half);           /* Y */
+  buf[idx * 4 + 0] = (u16) (py + 128 - sz->half);                     /* Y */
   buf[idx * 4 + 1] = (u16) (((u16) sz->size_byte << 8) | (idx + 1));  /* size + link */
   buf[idx * 4 + 2] = sz->tile_base;                                   /* tile */
-  buf[idx * 4 + 3] = (u16) (px - g_cam_x + 128 - sz->half);           /* X */
+  buf[idx * 4 + 3] = (u16) (px + 128 - sz->half);                     /* X */
 }
 
 void render_sprites(void)

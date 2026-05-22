@@ -43,8 +43,13 @@ typedef enum {
 extern u8 g_web_shape;
 extern const char * const WEB_SHAPE_NAMES[WEB_SHAPE_COUNT];
 
-/* Build rim-point table for the current shape. Call before web_pixel_*. */
+/* Build rim-point table for the current shape. Call before web_pixel_*.
+ * Resets claw animation state — call ONCE per scene install. */
 void web_init(void);
+
+/* Per-frame rim projection. Reads g_vp_x / g_vp_y and recomputes
+ * g_lane_mid_outer/inner. Doesn't touch claw animation. */
+void web_project(void);
 
 /* Project a lane + depth_fp onto screen pixel coords. */
 s16 web_pixel_x(u8 lane, fp16 depth_fp);
@@ -74,15 +79,18 @@ u8 * web_get_buf(void);
  * Called once per scene install. */
 void load_sprite_tiles_to_vram(void);
 
-/* Walk the entity active-list and write the VDP sprite attribute table.
- * Player + shots + flippers all rendered as hardware sprites.
- * Player goes first in the chain so it draws on top.
+/* True-3D camera, used by web_init for rim projection and by
+ * web_render_main when rasterising. Set per frame before calling
+ * web_init + web_render_main.
  *
- * Sprite positions are offset by (-g_cam_x, -g_cam_y) so they track the
- * ASIC's per-frame web shift (which samples source at +tilt = visible web
- * shifts by -tilt). Set the camera before calling each frame. */
-extern s16 g_cam_x;
-extern s16 g_cam_y;
+ *   screen_outer = (world - vp) / Z_NEAR + centre
+ *   screen_inner = (world - vp) / Z_FAR  + centre   (Z_FAR = 8 * Z_NEAR)
+ *
+ * Outer rim shifts by full vp, inner rim shifts by vp/8 — matches T2K
+ * Jaguar's `polyo2d` per-vertex projection. */
+extern s16 g_vp_x;
+extern s16 g_vp_y;
+
 void render_sprites(void);
 
 /* Rolling-claw animation + position slide. Player has 16 pre-rotated

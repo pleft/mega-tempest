@@ -254,17 +254,15 @@ static void install_playfield(void)
     mcd_wait_ack(CMD_PLAY_MOD);
     g_music_playing = 1;
 
-    /* Render web through ASIC pipeline onto plane B (tile_base 0x280,
-     * paint at plane (10, 4) for 20x20 cells = 160x160 web centred on
-     * screen (160, 112)). */
-    mcd_asic_load_web_stamps(4);     /* yellow lane lines */
-    mcd_render_asic(0x4000, 0x280, 10, 4, 0);
-  } else {
-    /* No Mega CD: fall back to software-rendered web. */
-    web_render_main(4);
-    web_dma_main_to_vram();
-    web_paint_plane_b();
   }
+  /* Web is software-rendered every frame for true-3D camera. Initial
+   * render gets it on plane B before play_main_thread's first frame. */
+  g_vp_x = 0;
+  g_vp_y = 0;
+  web_init();
+  web_render_main(4);
+  web_dma_main_to_vram();
+  web_paint_plane_b();
 
   load_sprite_tiles_to_vram();
 
@@ -445,26 +443,27 @@ static void play_main_thread(void)
   plane_putc(34, 27, (char) ('0' + (s % 10)));
 
 
-  /* Dynamic perspective camera every frame at 60Hz. 160x160 ASIC IMG
-   * is ~7ms DMA + ~5ms ASIC kick, fits in a frame. */
-  if (g_mcd_present) {
-    s16 px = web_pixel_x(g_player_lane, FP_ONE);
-    s16 py = web_pixel_y(g_player_lane, FP_ONE);
-    s16 cx = (s16) ((px - 160) >> 3);
-    s16 cy = (s16) ((py - 112) >> 3);
-    if (cx > 5)  cx = 5;       /* margin for 160x160 scale-5/4 web is 5px */
-    if (cx < -5) cx = -5;
-    if (cy > 5)  cy = 5;
-    if (cy < -5) cy = -5;
-    g_cam_x = cx;
-    g_cam_y = cy;
-    mcd_render_asic_tilt(0x4000, 0x280, 10, 4, g_cam_x, g_cam_y);
-  } else {
-    g_cam_x = 0;
-    g_cam_y = 0;
-  }
+  /* True-3D camera: vp_x/vp_y track the player's world-space rim
+   * offset, damped /4 so the pan is subtle. web_init projects the
+   * rim per-vertex with 1/Z so outer rim shifts fully and inner rim
+   * shifts /8. Re-rasterise + DMA + paint each frame.
+   *
+   * world units use the same scale as web_scale() output. Outer rim
+   * at world ±60. Damping (>>2) keeps vp in [-15, +15] which is a
+   * comfortable subset of rim radius. */
+  s16 px = web_pixel_x(g_player_lane, FP_ONE);
+  s16 py = web_pixel_y(g_player_lane, FP_ONE);
+  /* px/py here are PROJECTED screen coords from the previous frame's
+   * projection — convert back to world-relative by subtracting screen
+   * centre, then damp. */
+  g_vp_x = (s16) ((px - 160) >> 2);
+  g_vp_y = (s16) ((py - 112) >> 2);
 
-  /* Sprites render with g_cam_x/y applied so they track the visible web. */
+  web_project();
+  web_render_main(4);
+  web_dma_main_to_vram();
+  web_paint_plane_b();
+
   render_sprites();
 
   if (p1_single & PAD_B) install_title();

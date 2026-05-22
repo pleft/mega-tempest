@@ -8,7 +8,7 @@ SRC_PATH:=src
 RES_PATH:=res
 BUILD_PATH:=build
 
-CC_FLAGS?=-O1 -fconserve-stack -fomit-frame-pointer -fno-gcse
+CC_FLAGS?=-O2 -fconserve-stack -fomit-frame-pointer -fno-gcse
 AS_FLAGS?=
 # megadev declares vdp_dma_transfer as a non-static function body in its
 # header — including <main/vdp.h> from multiple TUs is an ODR violation
