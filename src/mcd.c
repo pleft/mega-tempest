@@ -351,25 +351,31 @@ void mcd_render_asic(u16 plane_vram_addr, u16 tile_base, u8 plane_x, u8 plane_y,
   while (*GA_REG_COMSTAT0_W != 0) ;
   wait_2m_main_to(0x80000);
 
-  /* IMG buffer is in standard 8x8 VDP tile format (just row-major
-   * arrangement, handled in plane B paint below). Direct DMA — no
-   * repack needed. */
+  /* IMG buffer is in standard VDP tile format. Use the BIOS DMA workaround
+   * for the Mega CD WR DMA hardware bug: start DMA from source + 2 bytes,
+   * then manually write the first long word via VDP_DATA. From BIOS
+   * disassembly (dmaTransferToVramWithRewrite, ROM:000002D4). */
   u16 mode2_reg = vdp_regs[1];
   vdp_ctrl = mode2_reg | VDP_DMA_ENABLE;
-  vdp_dma_transfer((char const *) WR_IMG_BUF,
+  vdp_dma_transfer((char const *) (WR_IMG_BUF + 2),
                    to_vdp_addr(tile_base * 32) | VRAM_W, 4096);
   vdp_ctrl = mode2_reg;
+  /* Rewrite the first long word at VRAM tile_base via direct VDP_DATA. */
+  vdp_ctrl_32 = to_vdp_addr(tile_base * 32) | VRAM_W;
+  vdp_data_32 = *((volatile u32 const *) WR_IMG_BUF);
 
-  /* Paint chosen plane ROW-MAJOR: tile = row * 16 + col. The ASIC's IMG
-   * buffer stores tiles row-major (confirmed via hex dump diagnostic
-   * 2026-05-21: pixel (3, 5) of stamp at IMG positions 3, 35, 67, 99
-   * landed at byte offsets 0x15, 0x95, 0x115, 0x195 — that's tiles 0,
-   * 4, 8, 12 = row-major. Earlier "col-major" interpretation was wrong
-   * but happened to look OK for symmetric stamps). */
+  /* Paint plane COL-MAJOR: tile = col*16 + row. The ASIC IMG buffer is
+   * stored in COL-MAJOR cell arrangement per Genesis Plus GX source
+   * (gfx.c line 595: bufferOffset = (vsize+1)*64-7, meaning each cell
+   * column occupies (vsize+1)*32 bytes contiguously). Tile (col, row)
+   * lives at byte offset (col * (H/8) + row) * 32.
+   *
+   * (My earlier "row-major" interpretation was wrong — the single-pixel
+   * test was symmetric so it couldn't distinguish row vs col-major.) */
   for (u8 row = 0; row < 16; ++row) {
     vdp_ctrl_32 = to_vdp_addr(plane_vram_addr + ((plane_y + row) * 64 + plane_x) * 2) | VRAM_W;
     for (u8 col = 0; col < 16; ++col) {
-      vdp_data = (u16) (tile_base + row * 16 + col);
+      vdp_data = (u16) (tile_base + col * 16 + row);
     }
   }
 }
