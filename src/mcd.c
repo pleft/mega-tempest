@@ -473,3 +473,81 @@ void mcd_wait_ack(u16 expected)
   *GA_REG_COMCMD0_W = 0;
   while (*GA_REG_COMSTAT0_W != 0) ;
 }
+
+/* ---- Pre-baked 3D variants ----------------------------------------------
+ * Each variant is a 12800-byte software-rendered web with a different
+ * camera position (vp_x/vp_y derived from one lane's outer rim). Stored
+ * in WR at offset variant_idx * WEB_BUF_BYTES.
+ *
+ * At install: pre-render N variants. Main holds WR ownership from here
+ * on (sub doesn't need WR — music plays from PRG-RAM, SFX from PCM-RAM).
+ *
+ * Per frame: DMA the variant matching the current player lane to plane B
+ * tiles at $5000 (= tile $280). BIOS WR→VRAM DMA workaround applied
+ * (DMA from src+2, manually rewrite first long word). */
+
+/* Variant K's WR-offset. The natural offset K*12800 would put variant 10 at
+ * 0x1F400..0x225FF, straddling WR offset 0x20000; VDP DMA from that source
+ * range delivers data to the wrong VRAM destination (cause of the lane-10
+ * glitch). Skip the colliding slot by remapping K=10..N-1 to (K+1)*12800.
+ * Slot at K*12800=0x1F400 is reserved/unused. */
+static u32 variant_wr_offset(u8 k)
+{
+  if (k < 10) return (u32) k * 12800;
+  return (u32) (k + 1) * 12800;
+}
+
+void mcd_prebake_web_variants(u8 pal)
+{
+  wait_2m_main_to(0x80000);
+
+  u8 const n = web_lane_count();
+  u8 const * src_buf = web_get_buf();
+
+  /* Snapshot lane outer-rim positions at vp=0 so the variant cameras
+   * are computed from STATIC world-space positions, not from positions
+   * that shift with each variant's own vp. */
+  g_vp_x = 0;
+  g_vp_y = 0;
+  web_project();
+  s16 lane_off_x[18], lane_off_y[18];   /* MAX_LANES = 18 in web.h */
+  for (u8 k = 0; k < n; ++k) {
+    lane_off_x[k] = (s16) (web_pixel_x(k, 0x10000) - 160);  /* world offset */
+    lane_off_y[k] = (s16) (web_pixel_y(k, 0x10000) - 112);
+  }
+
+  for (u8 k = 0; k < n; ++k) {
+    /* Damped /4: camera leans toward the player's lane without full follow. */
+    g_vp_x = (s16) (lane_off_x[k] >> 2);
+    g_vp_y = (s16) (lane_off_y[k] >> 2);
+    web_project();
+    web_render_main(pal);
+    /* Copy g_web_buf to WR slot k. Use word writes (Mode 1 byte coherency).
+     * Skip the slot at K=10's natural position because it would straddle
+     * WR offset 0x20000 — VDP DMA from a source range crossing that
+     * boundary delivers data to the wrong VRAM destination (the cause of
+     * the lane-10 glitch). variant_wr_offset() handles the offset
+     * remapping; we mirror it on the read side in mcd_dma_variant_to_vram. */
+    volatile u16 * dst = (volatile u16 *) (WR_MAIN + variant_wr_offset(k));
+    u16 const * src = (u16 const *) src_buf;
+    for (u16 i = 0; i < 12800 / 2; ++i) dst[i] = src[i];
+  }
+}
+
+/* DMA variant K from WR to VRAM tile range $280 (= byte $5000).
+ * Uses BIOS workaround for the WR→VRAM hardware shift bug.
+ * Caller has already updated g_vp_x/g_vp_y to match this variant. */
+void mcd_dma_variant_to_vram(u8 variant_idx)
+{
+  volatile u8 * src = WR_MAIN + variant_wr_offset(variant_idx);
+
+  u16 mode2_reg = vdp_regs[1];
+  vdp_ctrl = VDP_REG_AUTOINC | 2;
+  vdp_ctrl = mode2_reg | VDP_DMA_ENABLE;
+  vdp_dma_transfer((char const *) (src + 2),
+                   to_vdp_addr(0x280 * 32) | VRAM_W, 12800 / 2);
+  vdp_ctrl = mode2_reg;
+  /* Rewrite first long word manually (BIOS dmaTransferToVramWithRewrite). */
+  vdp_ctrl_32 = to_vdp_addr(0x280 * 32) | VRAM_W;
+  vdp_data_32 = *((volatile u32 const *) src);
+}

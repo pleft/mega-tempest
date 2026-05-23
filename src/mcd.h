@@ -41,6 +41,12 @@ void mcd_asic_load_tempest_test_stamp(void);
 void mcd_asic_load_web_stamps(u8 line_pal);
 void mcd_asic_load_map_diagnostic(void);
 
+/* Pre-render N web variants (one per lane) into Word RAM, each rendered
+ * with that lane's camera position. Per-frame, mcd_dma_variant DMAs the
+ * variant matching the player's current lane to plane B tile range. */
+void mcd_prebake_web_variants(u8 pal);
+void mcd_dma_variant_to_vram(u8 variant_idx);
+
 /* DIAGNOSTIC: bypass the ASIC. Render the current web to g_web_buf,
  * copy the centre 128x128 (cells 5..20) directly into WR_IMG_BUF in
  * COL-MAJOR tile order, then DMA + col-major paint (same back-end as

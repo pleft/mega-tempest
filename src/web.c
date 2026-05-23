@@ -38,7 +38,9 @@
  * outer rim's centre — you're looking slightly down into the playfield).
  * Positive = downward; for a Tempest-style "look down the tube" we use
  * negative = inner shape lifted upward. */
-#define WEB_VANISH_OFFSET_Y  (-25)
+/* Inner rim at the geometric centre — the dynamic 1/Z camera now
+ * provides the tunnel-into-perspective feel, no fake offset needed. */
+#define WEB_VANISH_OFFSET_Y  0
 
 /* Sprite-tile VRAM slots (data from src/sprites.{c,h}, baked by
  * tools/extract_mcd_sprites.py from tempest2k-source/src/obj2d.s).
@@ -229,9 +231,10 @@ u8 g_web_shape = WEB_SHAPE_V;
 
 // ---- Lane projection ------------------------------------------------------
 
-/* STATIC rim projection (no per-frame call needed). Stored positions
- * are camera-at-origin; per-frame camera pan is applied by the ASIC
- * trace and by emit_sprite (depth-interpolated). */
+/* Per-vertex 1/Z projection with g_vp_x/g_vp_y camera. Outer rim Z=1,
+ * inner rim Z=8. Outer shifts fully with vp, inner shifts /8.
+ * Matches T2K Jag's polyo2d projection. Called from pre-bake (once per
+ * variant) and per-frame (to update sprite-positioning lane mids). */
 void web_project(void)
 {
   const s8 (*rim)[2] = WEB_RIMS[g_web_shape];
@@ -242,10 +245,12 @@ void web_project(void)
   for (u8 i = 0; i < V; ++i) {
     s16 sx = web_scale(rim[i][0]);
     s16 sy = web_scale(rim[i][1]);
-    line_outer_x[i] = (s16) (WEB_CENTER_X + sx);
-    line_outer_y[i] = (s16) (WEB_CENTER_Y + sy);
-    line_inner_x[i] = (s16) (WEB_CENTER_X + (sx >> 3));
-    line_inner_y[i] = (s16) (WEB_CENTER_Y + WEB_VANISH_OFFSET_Y + (sy >> 3));
+    s16 dx = (s16) (sx - g_vp_x);
+    s16 dy = (s16) (sy - g_vp_y);
+    line_outer_x[i] = (s16) (WEB_CENTER_X + dx);
+    line_outer_y[i] = (s16) (WEB_CENTER_Y + dy);
+    line_inner_x[i] = (s16) (WEB_CENTER_X + (dx >> 3));
+    line_inner_y[i] = (s16) (WEB_CENTER_Y + WEB_VANISH_OFFSET_Y + (dy >> 3));
   }
 
   u8 lane_segments = (u8) (g_shape_closed ? V : V - 1);
@@ -527,16 +532,18 @@ static void web_render_to(WebCfg const * cfg, u8 pal)
   s16 const cx = (s16) (cfg->img_w / 2);
   s16 const cy = (s16) (cfg->img_h / 2);
 
-  /* Static rim points (camera at origin). Per-frame camera pan is
-   * applied later by the ASIC trace, not in the source rasterisation. */
+  /* True-3D rim projection with current g_vp_x/g_vp_y camera. Caller
+   * sets g_vp before calling (per-variant pre-bake or per-frame). */
   s16 ox[MAX_LANES], oy[MAX_LANES], ix[MAX_LANES], iy[MAX_LANES];
   for (u8 k = 0; k < V; ++k) {
     s16 sx = web_scale_c(cfg, rim[k][0]);
     s16 sy = web_scale_c(cfg, rim[k][1]);
-    ox[k] = (s16) (cx + sx);
-    oy[k] = (s16) (cy + sy);
-    ix[k] = (s16) (cx + (sx >> 3));
-    iy[k] = (s16) (cy + (sy >> 3) + cfg->vanish_y);
+    s16 dxv = (s16) (sx - g_vp_x);
+    s16 dyv = (s16) (sy - g_vp_y);
+    ox[k] = (s16) (cx + dxv);
+    oy[k] = (s16) (cy + dyv);
+    ix[k] = (s16) (cx + (dxv >> 3));
+    iy[k] = (s16) (cy + (dyv >> 3) + cfg->vanish_y);
   }
 
   /* 1. FILL each lane segment with a 4-band depth gradient. Skip when
@@ -643,6 +650,7 @@ void web_dma_main_to_vram(void)
 
 void web_paint_plane_b(void)
 {
+  vdp_ctrl = VDP_REG_AUTOINC | 2;
   for (u8 row = 0; row < WEB_CELLS_H; ++row) {
     u16 plane_b_addr = 0x4000 + ((PLANE_B_PAINT_ROW + row) * 64 + PLANE_B_PAINT_COL) * 2;
     vdp_ctrl_32 = to_vdp_addr(plane_b_addr) | VRAM_W;
@@ -653,11 +661,29 @@ void web_paint_plane_b(void)
 
 void web_clear_plane_b(void)
 {
-  for (u8 row = 0; row < WEB_CELLS_H; ++row) {
-    u16 plane_b_addr = 0x4000 + ((PLANE_B_PAINT_ROW + row) * 64 + PLANE_B_PAINT_COL) * 2;
-    vdp_ctrl_32 = to_vdp_addr(plane_b_addr) | VRAM_W;
-    for (u8 col = 0; col < WEB_CELLS_W; ++col) vdp_data = 0;
-  }
+  /* Explicit autoinc=2 — earlier DMA or other code may have left it
+   * different, in which case the loop below wouldn't actually clear
+   * all cells. */
+  vdp_ctrl = VDP_REG_AUTOINC | 2;
+  /* Full plane-B tilemap clear (64 cells x 32 rows = 4 KB). */
+  vdp_ctrl_32 = to_vdp_addr(0x4000) | VRAM_W;
+  for (u16 i = 0; i < 64 * 32; ++i) vdp_data = 0;
+
+  /* Also zero the scroll values for both planes — VRAM/VSRAM aren't
+   * zeroed at boot, and garbage scroll values shift the displayed web
+   * away from its intended position. */
+
+  /* H-scroll table at VRAM $BC00 (full-scroll mode: word 0 = plane A,
+   * word 1 = plane B). */
+  vdp_ctrl_32 = to_vdp_addr(0xBC00) | VRAM_W;
+  vdp_data = 0;     /* plane A H-scroll */
+  vdp_data = 0;     /* plane B H-scroll */
+
+  /* VSRAM write at offset 0 (plane A) and 2 (plane B).
+   * VSRAM-write command code = 0x40000010. */
+  vdp_ctrl_32 = (u32) 0x40000010;
+  vdp_data = 0;     /* plane A V-scroll */
+  vdp_data = 0;     /* plane B V-scroll */
 }
 
 // ---- Sprite tile DMA ------------------------------------------------------
@@ -719,16 +745,17 @@ void load_sprite_tiles_to_vram(void)
 s16 g_vp_x = 0;
 s16 g_vp_y = 0;
 
-/* Uniform camera pan applied to all sprites; matches the visible web's
- * uniform ASIC pan. (No depth interpolation — fast and consistent.) */
+/* web_project already projected the rim through the 1/Z camera into
+ * g_lane_mid_outer/inner_x/y, so web_pixel_x/y returns final screen
+ * coords that match the visible (variant) web. No vp subtraction here. */
 static inline void emit_sprite_depth(u16 * buf, u8 idx, const SpriteSizeDef * sz,
                                      s16 px, s16 py, fp16 depth_fp)
 {
   (void) depth_fp;
-  buf[idx * 4 + 0] = (u16) (py - g_vp_y + 128 - sz->half);            /* Y */
+  buf[idx * 4 + 0] = (u16) (py + 128 - sz->half);                     /* Y */
   buf[idx * 4 + 1] = (u16) (((u16) sz->size_byte << 8) | (idx + 1));  /* size + link */
   buf[idx * 4 + 2] = sz->tile_base;                                   /* tile */
-  buf[idx * 4 + 3] = (u16) (px - g_vp_x + 128 - sz->half);            /* X */
+  buf[idx * 4 + 3] = (u16) (px + 128 - sz->half);                     /* X */
 }
 
 void render_sprites(void)

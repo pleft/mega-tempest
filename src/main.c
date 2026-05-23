@@ -259,12 +259,18 @@ static void install_playfield(void)
   g_vp_y = 0;
   web_init();
   if (g_mcd_present) {
-    /* ASIC pipeline: software web renders fills+lines into stamps,
-     * ASIC re-renders per frame with V-shape camera tilt. */
-    mcd_asic_load_web_stamps(4);
-    mcd_render_asic(0x4000, 0x280, 10, 4, 0);
+    /* Clear plane B fully first (any stale tilemap entries from a
+     * previous install would otherwise show web tiles at the wrong
+     * cells once we DMA new tile data into the 0x280..0x40F range). */
+    web_clear_plane_b();
+    mcd_prebake_web_variants(4);
+    g_vp_x = 0;
+    g_vp_y = 0;
+    web_project();
+    mcd_dma_variant_to_vram(0);
+    web_paint_plane_b();
   } else {
-    /* No Mega CD: static software web (no camera pan). */
+    /* No Mega CD: static software web. */
     web_render_main(4);
     web_dma_main_to_vram();
     web_paint_plane_b();
@@ -449,22 +455,26 @@ static void play_main_thread(void)
   plane_putc(34, 27, (char) ('0' + (s % 10)));
 
 
-  /* Camera tracks player outer-rim position, damped /8 + clamped ±5 to
-   * stay within source web margin. ASIC V-shape trace shifts outer rim
-   * fully and inner rim /8 → 3D-like perspective at 60Hz. Sprites use
-   * the same vp via depth-interpolated cam offset. */
+  /* Pick pre-baked variant matching player's target lane (after slide).
+   * Set g_vp to that variant's camera, project rim mids so sprites match,
+   * DMA variant tile data to plane B. ~7ms DMA fits comfortably in 60Hz. */
   if (g_mcd_present) {
-    s16 px = web_pixel_x(g_player_lane, FP_ONE);
-    s16 py = web_pixel_y(g_player_lane, FP_ONE);
-    s16 cx = (s16) ((px - 160) >> 3);
-    s16 cy = (s16) ((py - 112) >> 3);
-    if (cx > 5)  cx = 5;
-    if (cx < -5) cx = -5;
-    if (cy > 5)  cy = 5;
-    if (cy < -5) cy = -5;
-    g_vp_x = cx;
-    g_vp_y = cy;
-    mcd_render_asic_tilt(0x4000, 0x280, 10, 4, g_vp_x, g_vp_y);
+    /* DIAG isolated the bug to per-lane variant data (variant 0 is
+     * clean; one specific variant K has bad pixels). Re-enabled so we
+     * can identify K via the LANE readout below — navigate to the
+     * glitch position and report the printed lane number. */
+    u8 variant_k = g_player_lane;
+    /* Reconstruct variant K's vp from lane K's outer-rim world offset
+     * (must match mcd_prebake_web_variants' calculation). */
+    g_vp_x = 0;
+    g_vp_y = 0;
+    web_project();
+    s16 lane_off_x = (s16) (web_pixel_x(variant_k, FP_ONE) - 160);
+    s16 lane_off_y = (s16) (web_pixel_y(variant_k, FP_ONE) - 112);
+    g_vp_x = (s16) (lane_off_x >> 2);
+    g_vp_y = (s16) (lane_off_y >> 2);
+    web_project();
+    mcd_dma_variant_to_vram(variant_k);
   } else {
     g_vp_x = 0;
     g_vp_y = 0;
