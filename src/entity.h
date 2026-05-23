@@ -12,7 +12,16 @@ typedef s32 fp16;
 #define FP_INT(fp)     ((s16) ((fp) >> 16))
 
 typedef struct Entity Entity;
-typedef enum { E_PLAYER = 1, E_SHOT = 2, E_FLIPPER = 3 } EntityType;
+typedef enum {
+  E_PLAYER  = 1,
+  E_SHOT    = 2,
+  E_FLIPPER = 3,
+  E_DEBRIS  = 4,    // death-burst particle; reuses existing fields:
+                    //   lane         = direction index 0..7
+                    //   depth_fp     = accumulated screen-x offset from spawn
+                    //   depth_vel_fp = accumulated screen-y offset from spawn
+                    //   lifetime     = frames remaining (auto-kill at 0)
+} EntityType;
 
 struct Entity {
   u8       type;

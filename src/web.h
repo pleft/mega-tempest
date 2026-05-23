@@ -24,6 +24,12 @@ u8 web_lane_count(void);
 u8 web_lane_left(u8 current);
 u8 web_lane_right(u8 current);
 
+/* The lane that sits visually at the bottom of the web (max screen y,
+ * closest to centre x on ties). Used as the default spawn / respawn lane
+ * so the player isn't dropped onto a corner that doesn't match a typical
+ * "standing on the ground" orientation. */
+u8 web_default_start_lane(void);
+
 /* 8 web shapes, all extracted from Tempest 2000's yak.s. Each maps to
  * a specific T2K web by polygon + lane count. Slot order is whatever
  * felt like a sensible "simple → exotic" progression for cycling on

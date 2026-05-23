@@ -304,6 +304,27 @@ void web_init(void)
 
 u8 web_lane_count(void) { return g_lane_count; }
 
+/* Default starting lane for the current shape: the lane whose outer
+ * mid-point sits at the bottom of the screen (max y), ties broken by
+ * closest-to-centre x. Looks natural for SQUARE, V, FAN, etc., where
+ * "bottom" is a clear orientation. */
+u8 web_default_start_lane(void)
+{
+  u8 best     = 0;
+  s16 best_y  = g_lane_mid_outer_y[0];
+  s16 dx0     = (s16) (g_lane_mid_outer_x[0] - WEB_CENTER_X);
+  s16 best_dx = (s16) (dx0 < 0 ? -dx0 : dx0);
+  for (u8 k = 1; k < g_lane_count; ++k) {
+    s16 y  = g_lane_mid_outer_y[k];
+    s16 dx = (s16) (g_lane_mid_outer_x[k] - WEB_CENTER_X);
+    if (dx < 0) dx = (s16) (-dx);
+    if (y > best_y || (y == best_y && dx < best_dx)) {
+      best = k; best_y = y; best_dx = dx;
+    }
+  }
+  return best;
+}
+
 u8 web_lane_left(u8 current)
 {
   if (current > 0) return (u8) (current - 1);
@@ -766,15 +787,19 @@ void render_sprites(void)
   /* Pass 1: PLAYER first → sprite 0 = highest priority (drawn on top).
    * Position interpolates between source and target lane (web_player_render_pos)
    * and the claw rotation rolls through a full revolution per lane change
-   * (g_claw_render_idx, animated by web_claw_tick). */
-  for (Entity * e = g_active_head; e; e = e->next) {
-    if (e->type != E_PLAYER || n >= SPR_MAX) continue;
-    s16 px, py;
-    web_player_render_pos(e->depth_fp, &px, &py);
-    SpriteSizeDef sz = { SPR_SIZE_2x2,
-                         (u16) (PLAYER_TILE_BASE + g_claw_render_idx * PLAYER_TILES_PER_LANE),
-                         8 };
-    emit_sprite_depth(spr_buf, n++, &sz, px, py, e->depth_fp);
+   * (g_claw_render_idx, animated by web_claw_tick).
+   * Hidden during the death animation (g_respawn_timer > 0). */
+  extern u8 g_respawn_timer;
+  if (g_respawn_timer == 0) {
+    for (Entity * e = g_active_head; e; e = e->next) {
+      if (e->type != E_PLAYER || n >= SPR_MAX) continue;
+      s16 px, py;
+      web_player_render_pos(e->depth_fp, &px, &py);
+      SpriteSizeDef sz = { SPR_SIZE_2x2,
+                           (u16) (PLAYER_TILE_BASE + g_claw_render_idx * PLAYER_TILES_PER_LANE),
+                           8 };
+      emit_sprite_depth(spr_buf, n++, &sz, px, py, e->depth_fp);
+    }
   }
 
   /* Pass 2: SHOTS. */
@@ -792,6 +817,19 @@ void render_sprites(void)
     s16 py = web_pixel_y(e->lane, e->depth_fp);
     u8 size_idx = (e->depth_fp < 0x8000) ? 0 : 1;
     emit_sprite_depth(spr_buf, n++, &FLIPPER_SIZES[size_idx], px, py, e->depth_fp);
+  }
+
+  /* Pass 4: DEBRIS — death-burst particles. Origin is the snapshotted
+   * claw position (g_death_x/y, written by main.c on death). Each particle
+   * stores accumulated x-offset in depth_fp and y-offset in depth_vel_fp;
+   * we just add to the origin and render as a 1x1 shot tile. */
+  extern s16 g_death_x;
+  extern s16 g_death_y;
+  for (Entity * e = g_active_head; e; e = e->next) {
+    if (e->type != E_DEBRIS || n >= SPR_MAX) continue;
+    s16 px = (s16) (g_death_x + (s16) e->depth_fp);
+    s16 py = (s16) (g_death_y + (s16) e->depth_vel_fp);
+    emit_sprite_depth(spr_buf, n++, &SHOT_SIZE, px, py, 0);
   }
 
   if (n == 0) {

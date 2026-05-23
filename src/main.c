@@ -179,6 +179,20 @@ static u32 g_rng = 0xCAFEF00Du;
 #define FLIPPER_MAX_ACTIVE   4
 #define HIT_DEPTH_TOL      (FP_ONE >> 4)   // collision threshold
 
+/* Death-burst particle effect. When the player dies, 8 debris sprites spawn
+ * at the claw's last screen position and fly outward in 8 cardinal +
+ * diagonal directions for ~30 frames before despawning. g_respawn_timer
+ * holds the player frozen (sprite hidden, input ignored) for the duration
+ * of the burst, then lane 0 respawn happens once it hits zero. */
+#define DEBRIS_LIFETIME    30
+#define DEBRIS_DIRS         8
+#define RESPAWN_DELAY      35      // a few frames longer than the burst
+static const s8 DEBRIS_DX[DEBRIS_DIRS] = {  3,  2,  0, -2, -3, -2,  0,  2 };
+static const s8 DEBRIS_DY[DEBRIS_DIRS] = {  0, -2, -3, -2,  0,  2,  3,  2 };
+s16 g_death_x;                    // exposed to web.c's render_sprites
+s16 g_death_y;
+u8  g_respawn_timer;              // >0 = player is dead and counting down
+
 static u16 lcg(void)
 {
   g_rng = g_rng * 1103515245u + 12345u;
@@ -218,6 +232,24 @@ static void kill_flipper(Entity * e)
   entity_kill(e);
 }
 
+/* Spawn 8 debris particles at the current death point, one per direction.
+ * Each particle reuses Entity fields: lane=dir, depth_fp=x-offset accum,
+ * depth_vel_fp=y-offset accum, lifetime=frames to live. */
+static void spawn_debris_burst(void)
+{
+  for (u8 i = 0; i < DEBRIS_DIRS; ++i) {
+    Entity * e = entity_spawn();
+    if (!e) return;     /* pool full — accept fewer particles, no big deal */
+    e->type         = E_DEBRIS;
+    e->lane         = i;          /* direction index */
+    e->depth_fp     = 0;          /* x-offset accumulator */
+    e->depth_vel_fp = 0;          /* y-offset accumulator */
+    e->phase        = 0;
+    e->step_period  = 0;
+    e->lifetime     = DEBRIS_LIFETIME;
+  }
+}
+
 static void play_always_vblank(void) { return; }
 static void play_gated_vblank (void);
 
@@ -234,13 +266,19 @@ static void install_playfield(void)
   g_scene_dirty          = 1;
 
   pool_init();
+  g_vp_x = 0;
+  g_vp_y = 0;
   web_init();
-  g_player_lane = 0;
+  /* Pick the bottom-centre lane as the spawn point and snap the claw
+   * slide animation to it (web_init resets slide state to lane 0). */
+  g_player_lane = web_default_start_lane();
+  web_player_snap_to(g_player_lane);
   g_left_tick = g_right_tick = 0;
   g_fire_cooldown = 0;
   g_spawn_timer  = FLIPPER_SPAWN_PERIOD;
   g_flipper_count = 0;
   g_score = 0;
+  g_respawn_timer = 0;
 
   // Kick off music for the round (Mega CD only — gracefully silent on plain MD).
   if (g_mcd_present) {
@@ -255,9 +293,6 @@ static void install_playfield(void)
     g_music_playing = 1;
 
   }
-  g_vp_x = 0;
-  g_vp_y = 0;
-  web_init();
   if (g_mcd_present) {
     /* Clear plane B fully first (any stale tilemap entries from a
      * previous install would otherwise show web tiles at the wrong
@@ -290,44 +325,51 @@ static void install_playfield(void)
 
 static void play_gated_vblank(void)
 {
-  // L/R lane hop with hold-to-repeat cooldown.
-  if (p1_hold & PAD_LEFT) {
-    if (g_left_tick == 0) {
-      u8 new_lane = web_lane_left(g_player_lane);
-      if (new_lane != g_player_lane) {
-        g_player_lane = new_lane;
-        web_lane_changed(g_player_lane, +1);   /* +1 = visual CCW = LEFT */
+  /* Input + fire gated by respawn timer — while dead, the player can't
+   * move or shoot. Spawn loop and entity tick keep running so debris
+   * animates and flippers keep approaching. */
+  if (g_respawn_timer == 0) {
+    // L/R lane hop with hold-to-repeat cooldown.
+    if (p1_hold & PAD_LEFT) {
+      if (g_left_tick == 0) {
+        u8 new_lane = web_lane_left(g_player_lane);
+        if (new_lane != g_player_lane) {
+          g_player_lane = new_lane;
+          web_lane_changed(g_player_lane, +1);   /* +1 = visual CCW = LEFT */
+        }
+        g_left_tick = (p1_single & PAD_LEFT) ? LANE_HOLD_INITIAL : LANE_HOLD_REPEAT;
+      } else {
+        g_left_tick--;
       }
-      g_left_tick = (p1_single & PAD_LEFT) ? LANE_HOLD_INITIAL : LANE_HOLD_REPEAT;
     } else {
-      g_left_tick--;
+      g_left_tick = 0;
     }
-  } else {
-    g_left_tick = 0;
-  }
-  if (p1_hold & PAD_RIGHT) {
-    if (g_right_tick == 0) {
-      u8 new_lane = web_lane_right(g_player_lane);
-      if (new_lane != g_player_lane) {
-        g_player_lane = new_lane;
-        web_lane_changed(g_player_lane, -1);   /* -1 = visual CW = RIGHT */
+    if (p1_hold & PAD_RIGHT) {
+      if (g_right_tick == 0) {
+        u8 new_lane = web_lane_right(g_player_lane);
+        if (new_lane != g_player_lane) {
+          g_player_lane = new_lane;
+          web_lane_changed(g_player_lane, -1);   /* -1 = visual CW = RIGHT */
+        }
+        g_right_tick = (p1_single & PAD_RIGHT) ? LANE_HOLD_INITIAL : LANE_HOLD_REPEAT;
+      } else {
+        g_right_tick--;
       }
-      g_right_tick = (p1_single & PAD_RIGHT) ? LANE_HOLD_INITIAL : LANE_HOLD_REPEAT;
     } else {
-      g_right_tick--;
+      g_right_tick = 0;
     }
-  } else {
-    g_right_tick = 0;
   }
 
   if (g_player) g_player->lane = g_player_lane;
   web_claw_tick(g_player_lane);
 
-  // Fire on A (with cooldown).
-  if (g_fire_cooldown) g_fire_cooldown--;
-  if ((p1_single & PAD_A) && g_fire_cooldown == 0) {
-    spawn_shot(g_player_lane);
-    g_fire_cooldown = FIRE_COOLDOWN;
+  // Fire on A (with cooldown). Also gated by respawn timer.
+  if (g_respawn_timer == 0) {
+    if (g_fire_cooldown) g_fire_cooldown--;
+    if ((p1_single & PAD_A) && g_fire_cooldown == 0) {
+      spawn_shot(g_player_lane);
+      g_fire_cooldown = FIRE_COOLDOWN;
+    }
   }
 
   // Spawn a flipper every spawn_period frames, capped.
@@ -367,6 +409,12 @@ static void play_gated_vblank(void)
           e->lifetime = e->step_period;
         }
       }
+    } else if (e->type == E_DEBRIS) {
+      /* Accumulate per-axis offset by direction's DX/DY each frame. */
+      e->depth_fp     += DEBRIS_DX[e->lane];
+      e->depth_vel_fp += DEBRIS_DY[e->lane];
+      if (e->lifetime) e->lifetime--;
+      if (e->lifetime == 0) entity_kill(e);
     }
     e = next;
   }
@@ -397,21 +445,37 @@ static void play_gated_vblank(void)
     s = s_next;
   }
 
-  // Flipper-at-rim on player's lane → respawn player at lane 0.
-  if (g_player) {
+  // Flipper-at-rim on player's lane → death (delayed respawn).
+  // Guarded by g_respawn_timer so a second flipper on the same lane
+  // can't re-trigger the death effect while the burst is playing.
+  if (g_player && g_respawn_timer == 0) {
     Entity * f = g_active_head;
     while (f) {
       Entity * f_next = f->next;
       if (f->type == E_FLIPPER && f->phase == 1 && f->lane == g_player_lane) {
-        g_player_lane = 0;
-        g_player->lane = 0;
-        web_player_snap_to(0);    /* match visual to logical respawn position */
+        /* Snapshot claw's outer-rim screen position — the burst origin. */
+        g_death_x = web_pixel_x(g_player_lane, FP_ONE);
+        g_death_y = web_pixel_y(g_player_lane, FP_ONE);
+        spawn_debris_burst();
         kill_flipper(f);
+        g_respawn_timer = RESPAWN_DELAY;       /* freeze + hide player */
         if (g_mcd_present) mcd_play_sfx(2);    /* 2 = DEATH — PCM */
         else               sfx_death();         /* PSG fallback */
         break;
       }
       f = f_next;
+    }
+  }
+
+  /* Respawn timer countdown — on hitting zero, snap the claw back to
+   * the shape's default starting lane and bring the player back to life. */
+  if (g_respawn_timer) {
+    g_respawn_timer--;
+    if (g_respawn_timer == 0) {
+      u8 start_lane = web_default_start_lane();
+      g_player_lane = start_lane;
+      if (g_player) g_player->lane = start_lane;
+      web_player_snap_to(start_lane);
     }
   }
 }
