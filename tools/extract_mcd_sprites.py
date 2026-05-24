@@ -30,6 +30,7 @@ PAL_RED    = 2
 PAL_PINK   = 3
 PAL_YELLOW = 4
 PAL_CYAN   = 9     # set in main.c cram[9] = 0x0EE0 — pulsar
+PAL_GREEN  = 10    # set in main.c cram[10] = 0x00E0 — fuseball
 
 # Flipper tile pack: 3 size tiers × 4 rotation frames (0°, 90°, 180°, 270°).
 # All output as 1x1 sprites; tier 0 = small dot (far), tier 2 = full 8x8 (near).
@@ -60,7 +61,16 @@ for tier, scale in [(0, 0.45), (1, 0.70), (2, 1.0)]:
         PULSAR_FRAMES.append(
             (f"pulsar_t{tier}_f{f}", label, verts_label, 0.0, 1, PAL_CYAN, scale))
 
-SPRITES = FLIPPER_FRAMES + TANKER_FRAMES + PULSAR_FRAMES + [
+# Fuseball tile pack: 3 size tiers × 2 leg frames (fbpiece1/fbpiece2 = the
+# two legs of the fuseball, alternated each frame for an animated wobble).
+FUSEBALL_FRAMES = []
+for tier, scale in [(0, 0.45), (1, 0.70), (2, 1.0)]:
+    for f, label in enumerate(["fbpiece1", "fbpiece2"]):
+        verts_label = "ft2v" if label == "fbpiece1" else "ft2v2"
+        FUSEBALL_FRAMES.append(
+            (f"fuseball_t{tier}_f{f}", label, verts_label, 0.0, 1, PAL_GREEN, scale))
+
+SPRITES = FLIPPER_FRAMES + TANKER_FRAMES + PULSAR_FRAMES + FUSEBALL_FRAMES + [
     ("shot",      "pshot",     "pshotverts", 0.0, 1, PAL_WHITE, 1.0),
 ] + [
     # 16 lane-specific claw rotations. `-lane * π/8` in y-down screen coords

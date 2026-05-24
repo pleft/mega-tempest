@@ -31,6 +31,10 @@ typedef enum {
                     // and pulsar is at the rim on the player's lane,
                     // kills the player. Reuses lane/depth_fp/depth_vel_fp
                     // /phase same as E_FLIPPER.
+  E_FUSEBALL = 7,   // erratic enemy — moves in/out and hops between
+                    // adjacent lanes at random intervals. lifetime =
+                    // ticks until next direction/lane change.
+                    // phase 0 = roaming, 1 = at rim (kills like flipper).
 } EntityType;
 
 struct Entity {

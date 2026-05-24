@@ -187,6 +187,8 @@ static u32 g_rng = 0xCAFEF00Du;
 #define FLIPPER_OUT_STEP   (FP_ONE >> 8)   // 256 ticks centre->rim (~4.3 sec)
 #define TANKER_OUT_STEP    (FP_ONE >> 9)   // 512 ticks centre->rim (~8.5 sec) — slower
 #define PULSAR_OUT_STEP    (FP_ONE >> 8)   // 256 ticks centre->rim (~4.3 sec) — same as flipper
+#define FUSEBALL_STEP      (FP_ONE >> 9)   // slower base velocity (it flips direction often)
+#define FUSEBALL_HOP_PERIOD 30             // ticks between random direction/lane changes
 #define FLIPPER_RIM_HOP    12              // frames between rim-walk hops
 #define FLIPPER_SPAWN_PERIOD 150           // ~2.5 sec at 60 Hz
 #define ENEMY_MAX_ACTIVE   3
@@ -267,6 +269,20 @@ static void spawn_pulsar(u8 lane)
   e->phase        = 0;
   e->step_period  = 0;
   e->lifetime     = 0;
+  g_enemy_count++;
+}
+
+static void spawn_fuseball(u8 lane)
+{
+  Entity * e = entity_spawn();
+  if (!e) return;
+  e->type         = E_FUSEBALL;
+  e->lane         = lane;
+  e->depth_fp     = 0;
+  e->depth_vel_fp = +FUSEBALL_STEP;
+  e->phase        = 0;
+  e->step_period  = 0;
+  e->lifetime     = FUSEBALL_HOP_PERIOD;
   g_enemy_count++;
 }
 
@@ -461,6 +477,7 @@ static void play_gated_vblank(void)
     u16 r = lcg() & 0x7;
     if      (r == 0) spawn_tanker(lane);
     else if (r == 1) spawn_pulsar(lane);
+    else if (r == 2) spawn_fuseball(lane);
     else             spawn_flipper(lane);
     g_spawn_timer = FLIPPER_SPAWN_PERIOD;
   }
@@ -512,6 +529,32 @@ static void play_gated_vblank(void)
           e->phase        = 1;
         }
       }
+    } else if (e->type == E_FUSEBALL) {
+      /* Erratic — drifts in/out, hops to adjacent lane at random
+       * intervals. lifetime ticks down between decision points. */
+      if (e->phase == 0) {
+        e->depth_fp += e->depth_vel_fp;
+        if (e->depth_fp >= FP_ONE) {
+          e->depth_fp     = FP_ONE;
+          e->depth_vel_fp = 0;
+          e->phase        = 1;       /* lock at rim */
+        } else if (e->depth_fp < 0) {
+          /* Bounced past centre — reverse direction. */
+          e->depth_fp     = 0;
+          e->depth_vel_fp = +FUSEBALL_STEP;
+        } else {
+          if (e->lifetime) e->lifetime--;
+          if (e->lifetime == 0) {
+            e->lifetime = FUSEBALL_HOP_PERIOD;
+            u16 r = lcg();
+            if (r & 0x0001) e->depth_vel_fp = -e->depth_vel_fp;
+            if (r & 0x0002) {
+              e->lane = (r & 0x0004) ? web_lane_left(e->lane)
+                                     : web_lane_right(e->lane);
+            }
+          }
+        }
+      }
     } else if (e->type == E_DEBRIS) {
       /* Accumulate per-axis offset by direction's DX/DY each frame. */
       e->depth_fp     += DEBRIS_DX[e->lane];
@@ -531,15 +574,17 @@ static void play_gated_vblank(void)
       Entity * f = g_active_head;
       while (f) {
         Entity * f_next = f->next;
-        if ((f->type == E_FLIPPER || f->type == E_TANKER || f->type == E_PULSAR)
+        if ((f->type == E_FLIPPER || f->type == E_TANKER ||
+             f->type == E_PULSAR  || f->type == E_FUSEBALL)
             && f->lane == s->lane) {
           fp16 d = s->depth_fp - f->depth_fp;
           if (d < 0) d = -d;
           if (d <= HIT_DEPTH_TOL) {
             entity_kill(s);
-            if      (f->type == E_TANKER) { split_tanker(f); g_score += 2; }
-            else if (f->type == E_PULSAR) { kill_enemy(f);   g_score += 3; }
-            else                          { kill_enemy(f);   g_score++;    }
+            if      (f->type == E_TANKER)   { split_tanker(f); g_score += 2; }
+            else if (f->type == E_PULSAR)   { kill_enemy(f);   g_score += 3; }
+            else if (f->type == E_FUSEBALL) { kill_enemy(f);   g_score += 4; }
+            else                            { kill_enemy(f);   g_score++;    }
             if (g_mcd_present) mcd_play_sfx(1);    /* 1 = HIT — PCM */
             else               sfx_hit();           /* PSG fallback */
             break;
@@ -563,7 +608,7 @@ static void play_gated_vblank(void)
        * 4-step ping-pong animation (PULSAR_FRAME_MAP[2] = 2). */
       u8 const pulse_step = (u8) ((g_anim_frame >> 4) & 0x3);
       u8 const pulse_peak = (pulse_step == 2);
-      if (((f->type == E_FLIPPER || f->type == E_TANKER) ||
+      if (((f->type == E_FLIPPER || f->type == E_TANKER || f->type == E_FUSEBALL) ||
            (f->type == E_PULSAR && pulse_peak)) &&
           f->phase == 1 && f->lane == g_player_lane) {
         /* Snapshot claw's outer-rim screen position — the burst origin. */
@@ -749,6 +794,7 @@ void main(void)
   cram[7]  = 0x0624;          // 7 medium blue
   cram[8]  = 0x0846;          // 8 brightest blue-purple — outermost band
   cram[9]  = 0x0EE0;          // 9 cyan    — pulsar sprite
+  cram[10] = 0x00E0;          // 10 green  — fuseball sprite
   cram[15] = 0x0AAA;          // 15 gray   — dim accent
   update_cram();
 
