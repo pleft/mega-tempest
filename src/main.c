@@ -62,6 +62,7 @@ static void clear_vsram(void)
 }
 
 volatile bool vblank_done;
+
 __attribute__((interrupt)) void INT2_EXT(void)    { return; }
 __attribute__((interrupt)) void INT4_HBLANK(void) { return; }
 __attribute__((interrupt)) void INT6_VBLANK(void)
@@ -69,6 +70,7 @@ __attribute__((interrupt)) void INT6_VBLANK(void)
   read_inputs();
   vblank_done = true;
 }
+
 
 static u16 const default_vdp_regs[] = {
   VDP_REG_MODE1 | VDP_HICOLOR_ENABLE,
@@ -303,6 +305,14 @@ static void install_playfield(void)
   g_engine.paused        = 0;
   g_scene_dirty          = 1;
 
+  /* Show LOADING immediately — the per-lane web pre-bake below takes
+   * ~10 s and the title screen's text would otherwise stay frozen on
+   * screen for that time. play_main_thread will clear+redraw on its
+   * first tick after this function returns. The VBlank IRQ pulses
+   * cram[1] while g_loading_pulse is set so the text breathes. */
+  clear_play_area();
+  print("LOADING...", plane_xy(15, 14));
+
   pool_init();
   g_vp_x = 0;
   g_vp_y = 0;
@@ -319,19 +329,16 @@ static void install_playfield(void)
   g_lives = LIVES_START;
   g_respawn_timer = 0;
 
-  // Kick off music for the round (Mega CD only — gracefully silent on plain MD).
-  if (g_mcd_present) {
-    if (g_music_playing) {
-      mcd_stop_mod();
-      mcd_wait_ack(CMD_STOP_MOD);
-      g_music_playing = 0;
-    }
-    mcd_upload_mod(&res_rave4_mod);
-    mcd_play_mod(res_rave4_mod.size);
-    mcd_wait_ack(CMD_PLAY_MOD);
-    g_music_playing = 1;
-
+  /* Stop any leftover music NOW so the LOADING screen is silent.
+   * The new MOD is uploaded + started AFTER all rendering finishes
+   * (further down) so music starts at the same moment the player sees
+   * the game ready. */
+  if (g_mcd_present && g_music_playing) {
+    mcd_stop_mod();
+    mcd_wait_ack(CMD_STOP_MOD);
+    g_music_playing = 0;
   }
+
   if (g_mcd_present) {
     /* Clear plane B fully first (any stale tilemap entries from a
      * previous install would otherwise show web tiles at the wrong
@@ -359,6 +366,19 @@ static void install_playfield(void)
     g_player->lane         = g_player_lane;
     g_player->depth_fp     = FP_ONE;
     g_player->depth_vel_fp = 0;
+  }
+
+  /* Reset cram[1] to bright white — the bake loop pulsed it. */
+  vdp_ctrl_32 = to_vdp_addr(1 * 2) | CRAM_W;
+  vdp_data    = 0x0EEE;
+
+  /* Level is fully rendered — kick off music now (Mega CD only;
+   * gracefully silent on plain MD). */
+  if (g_mcd_present) {
+    mcd_upload_mod(&res_rave4_mod);
+    mcd_play_mod(res_rave4_mod.size);
+    mcd_wait_ack(CMD_PLAY_MOD);
+    g_music_playing = 1;
   }
 }
 

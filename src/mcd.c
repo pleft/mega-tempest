@@ -516,7 +516,18 @@ void mcd_prebake_web_variants(u8 pal)
     lane_off_y[k] = (s16) (web_pixel_y(k, 0x10000) - 112);
   }
 
+  /* Pulse cram[1] (LOADING text colour) one step per variant. 8-step
+   * cycle; with ~15 variants per shape the loop runs through ~2 cycles
+   * over the bake. Safe to do here because no VDP transfer is active
+   * between variants — the CPU-only render + RAM→WR copy don't touch
+   * the VDP control port. */
+  static const u16 LOADING_PULSE[8] = {
+    0x0EEE, 0x0CCC, 0x0888, 0x0444, 0x0222, 0x0444, 0x0888, 0x0CCC,
+  };
   for (u8 k = 0; k < n; ++k) {
+    vdp_ctrl_32 = to_vdp_addr(1 * 2) | CRAM_W;
+    vdp_data    = LOADING_PULSE[k & 0x7];
+
     /* Damped /4: camera leans toward the player's lane without full follow. */
     g_vp_x = (s16) (lane_off_x[k] >> 2);
     g_vp_y = (s16) (lane_off_y[k] >> 2);
