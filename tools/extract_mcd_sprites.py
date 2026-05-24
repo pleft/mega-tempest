@@ -27,6 +27,7 @@ OUT_H = Path(__file__).resolve().parents[1] / "src/sprites.h"
 # sprite scaling (3 tiers, all 8x8 = 1x1 sprite, just less filled when far).
 PAL_WHITE  = 1
 PAL_RED    = 2
+PAL_PINK   = 3
 PAL_YELLOW = 4
 
 # Flipper tile pack: 3 size tiers × 4 rotation frames (0°, 90°, 180°, 270°).
@@ -43,7 +44,7 @@ for tier, scale in [(0, 0.45), (1, 0.70), (2, 1.0)]:
 # polygon (s_fliptank) is visually distinct from the flipper X; no
 # rotation needed (4-fold symmetric anyway).
 TANKER_FRAMES = [
-    (f"tanker_t{tier}", "s_fliptank", "ftankverts", 0.0, 1, PAL_RED, scale)
+    (f"tanker_t{tier}", "s_fliptank", "ftankverts", 0.0, 1, PAL_PINK, scale)
     for tier, scale in [(0, 0.45), (1, 0.70), (2, 1.0)]
 ]
 

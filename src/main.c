@@ -182,11 +182,11 @@ static u32 g_rng = 0xCAFEF00Du;
 #define LANE_HOLD_REPEAT   4     // frames between subsequent repeats
 #define FIRE_COOLDOWN      6     // frames between shots
 #define SHOT_INWARD_STEP   (FP_ONE >> 5)   // 32 ticks rim->centre
-#define FLIPPER_OUT_STEP   (FP_ONE >> 7)   // 128 ticks centre->rim (~2 sec)
-#define TANKER_OUT_STEP    (FP_ONE >> 8)   // 256 ticks centre->rim (~4 sec) — slower
+#define FLIPPER_OUT_STEP   (FP_ONE >> 8)   // 256 ticks centre->rim (~4.3 sec)
+#define TANKER_OUT_STEP    (FP_ONE >> 9)   // 512 ticks centre->rim (~8.5 sec) — slower
 #define FLIPPER_RIM_HOP    12              // frames between rim-walk hops
-#define FLIPPER_SPAWN_PERIOD 90            // ~1.5 sec at 60 Hz
-#define ENEMY_MAX_ACTIVE   4
+#define FLIPPER_SPAWN_PERIOD 150           // ~2.5 sec at 60 Hz
+#define ENEMY_MAX_ACTIVE   3
 #define HIT_DEPTH_TOL      (FP_ONE >> 4)   // collision threshold
 
 /* Death-burst particle effect. When the player dies, 8 debris sprites spawn
@@ -681,7 +681,8 @@ void main(void)
   for (u8 i = 0; i < 64; ++i) cram[i] = 0;
   cram[0]  = 0x0000;          // 0 transparent / black
   cram[1]  = 0x0EEE;          // 1 white   — text, UI, player
-  cram[2]  = 0x000E;          // 2 red     — enemy sprites
+  cram[2]  = 0x000E;          // 2 red     — flipper sprites
+  cram[3]  = 0x0E0E;          // 3 magenta — tanker ("Pink Thang" per obj2d.s)
   cram[4]  = 0x00EE;          // 4 yellow  — web outline lines
   /* Web lane fill gradient: 4 bands from deep (inner, far) to bright
    * (outer rim, near). All in the blue/purple family for that T2K vibe. */
