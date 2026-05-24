@@ -171,6 +171,7 @@ static u16 g_spawn_timer;        // frames until next flipper spawn
 static u8  g_flipper_count;
 static u16 g_score;
 static u8  g_lives;              // remaining lives — game over at 0
+u8         g_anim_frame;         // global frame counter — drives flipper rotation
 static u32 g_rng = 0xCAFEF00Du;
 
 /* Debug switch — set to 1 to disable game-over (lives never decrement,
@@ -334,6 +335,8 @@ static void install_playfield(void)
 
 static void play_gated_vblank(void)
 {
+  g_anim_frame++;     /* drives flipper rotation (4 frames, 8 ticks each) */
+
   /* Input + fire gated by respawn timer — while dead, the player can't
    * move or shoot. Spawn loop and entity tick keep running so debris
    * animates and flippers keep approaching. */

@@ -46,8 +46,9 @@
  * tools/extract_mcd_sprites.py from tempest2k-source/src/obj2d.s).
  * Player is 16 pre-rotated claws (one per lane) packed contiguously so we
  * can pick by `PLAYER_TILE_BASE + lane * 4`. */
-#define FLIPPER_TILE_FAR    0x540       /* 8x8  = 1 tile,  red flipper */
-#define FLIPPER_TILE_MID    0x550       /* 16x16 = 4 tiles, red flipper */
+/* Flipper tile pack: 3 size tiers × 4 rotation frames, all 1x1 = 12 tiles
+ * contiguous at $540..$54B. Tier T frame F → tile $540 + T*4 + F. */
+#define FLIPPER_TILE_BASE   0x540       /* 12 tiles total, $540..$54B */
 #define PLAYER_TILE_BASE    0x560       /* 16 × 4 tiles = 64 tiles, $560..$59F */
 #define SHOT_TILE           0x5A0       /* 8x8 = 1 tile, white shot */
 
@@ -724,10 +725,6 @@ void web_clear_plane_b(void)
 #define SPR_SIZE_1x1  0x00
 #define SPR_SIZE_2x2  0x05
 typedef struct { u8 size_byte; u16 tile_base; u8 half; } SpriteSizeDef;
-static const SpriteSizeDef FLIPPER_SIZES[2] = {
-  { SPR_SIZE_1x1, FLIPPER_TILE_FAR, 4 },     /*  8x8 — far / centre */
-  { SPR_SIZE_2x2, FLIPPER_TILE_MID, 8 },     /* 16x16 — near / rim  */
-};
 static const SpriteSizeDef SHOT_SIZE = { SPR_SIZE_1x1, SHOT_TILE, 4 };
 /* PLAYER picks tile_base = PLAYER_TILE_BASE + lane*4 at render time. */
 
@@ -751,11 +748,19 @@ static void dma_tile_blob(const u8 * src, u16 tile_base, u16 byte_count)
   vdp_ctrl = mode2_dma_off;
 }
 
+/* 3 tiers × 4 frames = 12 contiguous tiles. Index = tier*4 + frame. */
+static const u8 * const FLIPPER_TILES[12] = {
+  SPR_FLIPPER_T0_F0, SPR_FLIPPER_T0_F1, SPR_FLIPPER_T0_F2, SPR_FLIPPER_T0_F3,
+  SPR_FLIPPER_T1_F0, SPR_FLIPPER_T1_F1, SPR_FLIPPER_T1_F2, SPR_FLIPPER_T1_F3,
+  SPR_FLIPPER_T2_F0, SPR_FLIPPER_T2_F1, SPR_FLIPPER_T2_F2, SPR_FLIPPER_T2_F3,
+};
+
 void load_sprite_tiles_to_vram(void)
 {
-  dma_tile_blob(SPR_FLIPPER_S, FLIPPER_TILE_FAR, sizeof SPR_FLIPPER_S);
-  dma_tile_blob(SPR_FLIPPER_M, FLIPPER_TILE_MID, sizeof SPR_FLIPPER_M);
-  dma_tile_blob(SPR_SHOT,      SHOT_TILE,        sizeof SPR_SHOT);
+  for (u8 i = 0; i < 12; ++i) {
+    dma_tile_blob(FLIPPER_TILES[i], (u16) (FLIPPER_TILE_BASE + i), 32);
+  }
+  dma_tile_blob(SPR_SHOT, SHOT_TILE, sizeof SPR_SHOT);
   /* All 16 player claws packed contiguously starting at PLAYER_TILE_BASE. */
   for (u8 i = 0; i < NUM_LANES; ++i) {
     dma_tile_blob(PLAYER_TILES[i],
@@ -814,13 +819,21 @@ void render_sprites(void)
     emit_sprite_depth(spr_buf, n++, &SHOT_SIZE, px, py, e->depth_fp);
   }
 
-  /* Pass 3: FLIPPERS, depth-scaled. */
+  /* Pass 3: FLIPPERS — 3 depth tiers × 4 rotation frames, all 1x1.
+   * Tier picked from depth_fp (thirds); rotation from g_anim_frame so
+   * all flippers tumble in sync. */
+  extern u8 g_anim_frame;
+  u8 const frame = (u8) ((g_anim_frame >> 3) & 0x03);
   for (Entity * e = g_active_head; e; e = e->next) {
     if (e->type != E_FLIPPER || n >= SPR_MAX) continue;
     s16 px = web_pixel_x(e->lane, e->depth_fp);
     s16 py = web_pixel_y(e->lane, e->depth_fp);
-    u8 size_idx = (e->depth_fp < 0x8000) ? 0 : 1;
-    emit_sprite_depth(spr_buf, n++, &FLIPPER_SIZES[size_idx], px, py, e->depth_fp);
+    u8 tier = (e->depth_fp < 0x5555) ? 0
+            : (e->depth_fp < 0xAAAA) ? 1 : 2;
+    SpriteSizeDef sz = { SPR_SIZE_1x1,
+                         (u16) (FLIPPER_TILE_BASE + tier * 4 + frame),
+                         4 };
+    emit_sprite_depth(spr_buf, n++, &sz, px, py, e->depth_fp);
   }
 
   /* Pass 4: DEBRIS — death-burst particles. Origin is the snapshotted
