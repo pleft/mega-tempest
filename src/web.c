@@ -223,7 +223,9 @@ static const u8 WEB_LANE_COUNT[WEB_SHAPE_COUNT] = {
   12,   /* FAN      — web1  (12 verts → 11 lanes when open) */
 };
 static const u8 WEB_CLOSED[WEB_SHAPE_COUNT] = {
-  1, 1, 1, 1, 1, 1,
+  0,                /* V is OPEN at the top — matches Jag web2 (15 lanes,
+                       16 verts, no wrap edge between upper-left/upper-right). */
+  1, 1, 1, 1, 1,
   0, 0,   /* W and FAN are open — player walks the line, no wrap. */
 };
 
@@ -249,8 +251,10 @@ void web_project(void)
     s16 dy = (s16) (sy - g_vp_y);
     line_outer_x[i] = (s16) (WEB_CENTER_X + dx);
     line_outer_y[i] = (s16) (WEB_CENTER_Y + dy);
-    line_inner_x[i] = (s16) (WEB_CENTER_X + (dx >> 3));
-    line_inner_y[i] = (s16) (WEB_CENTER_Y + WEB_VANISH_OFFSET_Y + (dy >> 3));
+    /* Inner rim at 1/16 of outer (was 1/8) — longer visible lanes, stronger
+     * "looking-down-the-tube" perspective. Flipper traversal time unchanged. */
+    line_inner_x[i] = (s16) (WEB_CENTER_X + (dx >> 4));
+    line_inner_y[i] = (s16) (WEB_CENTER_Y + WEB_VANISH_OFFSET_Y + (dy >> 4));
   }
 
   u8 lane_segments = (u8) (g_shape_closed ? V : V - 1);
