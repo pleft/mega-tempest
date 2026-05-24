@@ -168,7 +168,7 @@ static u8  g_left_tick;          // hold-to-repeat cooldowns
 static u8  g_right_tick;
 static u8  g_fire_cooldown;      // frames until next shot allowed
 static u16 g_spawn_timer;        // frames until next flipper spawn
-static u8  g_flipper_count;
+static u8  g_enemy_count;
 static u16 g_score;
 static u8  g_lives;              // remaining lives — game over at 0
 u8         g_anim_frame;         // global frame counter — drives flipper rotation
@@ -183,9 +183,10 @@ static u32 g_rng = 0xCAFEF00Du;
 #define FIRE_COOLDOWN      6     // frames between shots
 #define SHOT_INWARD_STEP   (FP_ONE >> 5)   // 32 ticks rim->centre
 #define FLIPPER_OUT_STEP   (FP_ONE >> 7)   // 128 ticks centre->rim (~2 sec)
+#define TANKER_OUT_STEP    (FP_ONE >> 8)   // 256 ticks centre->rim (~4 sec) — slower
 #define FLIPPER_RIM_HOP    12              // frames between rim-walk hops
 #define FLIPPER_SPAWN_PERIOD 90            // ~1.5 sec at 60 Hz
-#define FLIPPER_MAX_ACTIVE   4
+#define ENEMY_MAX_ACTIVE   4
 #define HIT_DEPTH_TOL      (FP_ONE >> 4)   // collision threshold
 
 /* Death-burst particle effect. When the player dies, 8 debris sprites spawn
@@ -221,23 +222,51 @@ static void spawn_shot(u8 lane)
   else               sfx_fire();          /* PSG fallback when no Mega CD */
 }
 
-static void spawn_flipper(u8 lane)
+static Entity * spawn_flipper_at(u8 lane, fp16 depth_fp)
+{
+  Entity * e = entity_spawn();
+  if (!e) return 0;
+  e->type         = E_FLIPPER;
+  e->lane         = lane;
+  e->depth_fp     = depth_fp;
+  e->depth_vel_fp = +FLIPPER_OUT_STEP;
+  e->phase        = (depth_fp >= FP_ONE) ? 1 : 0;
+  e->step_period  = FLIPPER_RIM_HOP;
+  e->lifetime     = FLIPPER_RIM_HOP;
+  g_enemy_count++;
+  return e;
+}
+
+static void spawn_flipper(u8 lane) { (void) spawn_flipper_at(lane, 0); }
+
+static void spawn_tanker(u8 lane)
 {
   Entity * e = entity_spawn();
   if (!e) return;
-  e->type         = E_FLIPPER;
+  e->type         = E_TANKER;
   e->lane         = lane;
   e->depth_fp     = 0;
-  e->depth_vel_fp = +FLIPPER_OUT_STEP;
+  e->depth_vel_fp = +TANKER_OUT_STEP;
   e->phase        = 0;
-  e->step_period  = FLIPPER_RIM_HOP;
-  e->lifetime     = FLIPPER_RIM_HOP;
-  g_flipper_count++;
+  e->step_period  = 0;
+  e->lifetime     = 0;
+  g_enemy_count++;
 }
 
-static void kill_flipper(Entity * e)
+/* Shot hit a tanker — spawn 2 flippers on adjacent lanes at the tanker's
+ * current depth and kill the tanker. */
+static void split_tanker(Entity * t)
 {
-  g_flipper_count--;
+  u8 lane = t->lane;
+  spawn_flipper_at(web_lane_left(lane),  t->depth_fp);
+  spawn_flipper_at(web_lane_right(lane), t->depth_fp);
+  g_enemy_count--;        /* the tanker itself */
+  entity_kill(t);
+}
+
+static void kill_enemy(Entity * e)
+{
+  g_enemy_count--;
   entity_kill(e);
 }
 
@@ -285,7 +314,7 @@ static void install_playfield(void)
   g_left_tick = g_right_tick = 0;
   g_fire_cooldown = 0;
   g_spawn_timer  = FLIPPER_SPAWN_PERIOD;
-  g_flipper_count = 0;
+  g_enemy_count = 0;
   g_score = 0;
   g_lives = LIVES_START;
   g_respawn_timer = 0;
@@ -384,16 +413,18 @@ static void play_gated_vblank(void)
     }
   }
 
-  // Spawn a flipper every spawn_period frames, capped.
+  // Spawn an enemy every spawn_period frames, capped. ~1 in 8 spawn
+  // slots produces a tanker instead of a flipper.
   if (g_spawn_timer) g_spawn_timer--;
-  if (g_spawn_timer == 0 && g_flipper_count < FLIPPER_MAX_ACTIVE) {
+  if (g_spawn_timer == 0 && g_enemy_count < ENEMY_MAX_ACTIVE) {
     /* Pick a random lane in [0, lane_count). lcg() & 0x1F gives 0..31;
      * clamp into the valid range with a couple of subtractions to keep
      * us off __umodsi3. Slight bias toward low lanes is fine here. */
     u8 lane = (u8) (lcg() & 0x1F);
     u8 lc   = web_lane_count();
     while (lane >= lc) lane = (u8) (lane - lc);
-    spawn_flipper(lane);
+    if ((lcg() & 0x7) == 0) spawn_tanker(lane);
+    else                    spawn_flipper(lane);
     g_spawn_timer = FLIPPER_SPAWN_PERIOD;
   }
 
@@ -421,6 +452,17 @@ static void play_gated_vblank(void)
           e->lifetime = e->step_period;
         }
       }
+    } else if (e->type == E_TANKER) {
+      /* Tanker only descends — no rim-walk. On reaching the rim it sits
+       * there (phase 1) and kills the player on contact. */
+      if (e->phase == 0) {
+        e->depth_fp += e->depth_vel_fp;
+        if (e->depth_fp >= FP_ONE) {
+          e->depth_fp     = FP_ONE;
+          e->depth_vel_fp = 0;
+          e->phase        = 1;
+        }
+      }
     } else if (e->type == E_DEBRIS) {
       /* Accumulate per-axis offset by direction's DX/DY each frame. */
       e->depth_fp     += DEBRIS_DX[e->lane];
@@ -431,7 +473,8 @@ static void play_gated_vblank(void)
     e = next;
   }
 
-  // Shot↔flipper collisions: same lane + close depth_fp.
+  // Shot↔enemy collisions: same lane + close depth_fp.
+  // Tanker hit → splits into 2 flippers (and scores double).
   Entity * s = g_active_head;
   while (s) {
     Entity * s_next = s->next;
@@ -439,13 +482,13 @@ static void play_gated_vblank(void)
       Entity * f = g_active_head;
       while (f) {
         Entity * f_next = f->next;
-        if (f->type == E_FLIPPER && f->lane == s->lane) {
+        if ((f->type == E_FLIPPER || f->type == E_TANKER) && f->lane == s->lane) {
           fp16 d = s->depth_fp - f->depth_fp;
           if (d < 0) d = -d;
           if (d <= HIT_DEPTH_TOL) {
             entity_kill(s);
-            kill_flipper(f);
-            g_score++;
+            if (f->type == E_TANKER) { split_tanker(f); g_score += 2; }
+            else                     { kill_enemy(f);   g_score++;    }
             if (g_mcd_present) mcd_play_sfx(1);    /* 1 = HIT — PCM */
             else               sfx_hit();           /* PSG fallback */
             break;
@@ -464,12 +507,13 @@ static void play_gated_vblank(void)
     Entity * f = g_active_head;
     while (f) {
       Entity * f_next = f->next;
-      if (f->type == E_FLIPPER && f->phase == 1 && f->lane == g_player_lane) {
+      if ((f->type == E_FLIPPER || f->type == E_TANKER) &&
+          f->phase == 1 && f->lane == g_player_lane) {
         /* Snapshot claw's outer-rim screen position — the burst origin. */
         g_death_x = web_pixel_x(g_player_lane, FP_ONE);
         g_death_y = web_pixel_y(g_player_lane, FP_ONE);
         spawn_debris_burst();
-        kill_flipper(f);
+        kill_enemy(f);
         g_respawn_timer = RESPAWN_DELAY;       /* freeze + hide player */
 #if !INFINITE_LIVES
         if (g_lives) g_lives--;

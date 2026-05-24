@@ -21,6 +21,11 @@ typedef enum {
                     //   depth_fp     = accumulated screen-x offset from spawn
                     //   depth_vel_fp = accumulated screen-y offset from spawn
                     //   lifetime     = frames remaining (auto-kill at 0)
+  E_TANKER  = 5,    // big slow enemy; splits into 2 flippers on hit.
+                    // Same field semantics as E_FLIPPER (lane, phase,
+                    // depth_fp, depth_vel_fp). Tankers don't rim-walk —
+                    // they sit at the rim on reaching it and kill the
+                    // player when the claw passes through that lane.
 } EntityType;
 
 struct Entity {

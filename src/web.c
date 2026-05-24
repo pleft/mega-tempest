@@ -51,6 +51,7 @@
 #define FLIPPER_TILE_BASE   0x540       /* 12 tiles total, $540..$54B */
 #define PLAYER_TILE_BASE    0x560       /* 16 × 4 tiles = 64 tiles, $560..$59F */
 #define SHOT_TILE           0x5A0       /* 8x8 = 1 tile, white shot */
+#define TANKER_TILE_BASE    0x5A1       /* 3 tiers × 1 frame = 3 tiles, $5A1..$5A3 */
 
 #define PLAYER_TILES_PER_LANE 4         /* 2x2 = 4 tiles per claw rotation */
 
@@ -755,10 +756,18 @@ static const u8 * const FLIPPER_TILES[12] = {
   SPR_FLIPPER_T2_F0, SPR_FLIPPER_T2_F1, SPR_FLIPPER_T2_F2, SPR_FLIPPER_T2_F3,
 };
 
+/* 3 tiers, 1 frame each = 3 contiguous tiles. Index = tier. */
+static const u8 * const TANKER_TILES[3] = {
+  SPR_TANKER_T0, SPR_TANKER_T1, SPR_TANKER_T2,
+};
+
 void load_sprite_tiles_to_vram(void)
 {
   for (u8 i = 0; i < 12; ++i) {
     dma_tile_blob(FLIPPER_TILES[i], (u16) (FLIPPER_TILE_BASE + i), 32);
+  }
+  for (u8 i = 0; i < 3; ++i) {
+    dma_tile_blob(TANKER_TILES[i], (u16) (TANKER_TILE_BASE + i), 32);
   }
   dma_tile_blob(SPR_SHOT, SHOT_TILE, sizeof SPR_SHOT);
   /* All 16 player claws packed contiguously starting at PLAYER_TILE_BASE. */
@@ -836,7 +845,20 @@ void render_sprites(void)
     emit_sprite_depth(spr_buf, n++, &sz, px, py, e->depth_fp);
   }
 
-  /* Pass 4: DEBRIS — death-burst particles. Origin is the snapshotted
+  /* Pass 4: TANKERS — 3 depth tiers × 1 frame, all 1x1. No rotation. */
+  for (Entity * e = g_active_head; e; e = e->next) {
+    if (e->type != E_TANKER || n >= SPR_MAX) continue;
+    s16 px = web_pixel_x(e->lane, e->depth_fp);
+    s16 py = web_pixel_y(e->lane, e->depth_fp);
+    u8 tier = (e->depth_fp < 0x5555) ? 0
+            : (e->depth_fp < 0xAAAA) ? 1 : 2;
+    SpriteSizeDef sz = { SPR_SIZE_1x1,
+                         (u16) (TANKER_TILE_BASE + tier),
+                         4 };
+    emit_sprite_depth(spr_buf, n++, &sz, px, py, e->depth_fp);
+  }
+
+  /* Pass 5: DEBRIS — death-burst particles. Origin is the snapshotted
    * claw position (g_death_x/y, written by main.c on death). Each particle
    * stores accumulated x-offset in depth_fp and y-offset in depth_vel_fp;
    * we just add to the origin and render as a 1x1 shot tile. */

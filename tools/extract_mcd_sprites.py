@@ -39,7 +39,15 @@ for tier, scale in [(0, 0.45), (1, 0.70), (2, 1.0)]:
     for f, ang in enumerate([0.0, math.pi/4, math.pi/2, 3*math.pi/4]):
         FLIPPER_FRAMES.append((f"flipper_t{tier}_f{f}", "s_flipper", "fverts", ang, 1, PAL_RED, scale))
 
-SPRITES = FLIPPER_FRAMES + [
+# Tanker tile pack: 3 size tiers × 1 frame = 3 tiles. The diamond
+# polygon (s_fliptank) is visually distinct from the flipper X; no
+# rotation needed (4-fold symmetric anyway).
+TANKER_FRAMES = [
+    (f"tanker_t{tier}", "s_fliptank", "ftankverts", 0.0, 1, PAL_RED, scale)
+    for tier, scale in [(0, 0.45), (1, 0.70), (2, 1.0)]
+]
+
+SPRITES = FLIPPER_FRAMES + TANKER_FRAMES + [
     ("shot",      "pshot",     "pshotverts", 0.0, 1, PAL_WHITE, 1.0),
 ] + [
     # 16 lane-specific claw rotations. `-lane * π/8` in y-down screen coords
