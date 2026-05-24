@@ -54,6 +54,7 @@
 #define TANKER_TILE_BASE    0x5A1       /* 3 tiers × 1 frame = 3 tiles, $5A1..$5A3 */
 #define PULSAR_TILE_BASE    0x5A4       /* 3 tiers × 3 frames = 9 tiles, $5A4..$5AC */
 #define FUSEBALL_TILE_BASE  0x5AD       /* 3 tiers × 2 frames = 6 tiles, $5AD..$5B2 */
+#define SPIKER_TILE_BASE    0x5B3       /* 3 tiers × 1 frame  = 3 tiles, $5B3..$5B5 */
 
 #define PLAYER_TILES_PER_LANE 4         /* 2x2 = 4 tiles per claw rotation */
 
@@ -777,6 +778,11 @@ static const u8 * const FUSEBALL_TILES[6] = {
   SPR_FUSEBALL_T2_F0, SPR_FUSEBALL_T2_F1,
 };
 
+/* 3 tiers, 1 frame each = 3 contiguous tiles. Index = tier. */
+static const u8 * const SPIKER_TILES[3] = {
+  SPR_SPIKER_T0, SPR_SPIKER_T1, SPR_SPIKER_T2,
+};
+
 void load_sprite_tiles_to_vram(void)
 {
   for (u8 i = 0; i < 12; ++i) {
@@ -790,6 +796,9 @@ void load_sprite_tiles_to_vram(void)
   }
   for (u8 i = 0; i < 6; ++i) {
     dma_tile_blob(FUSEBALL_TILES[i], (u16) (FUSEBALL_TILE_BASE + i), 32);
+  }
+  for (u8 i = 0; i < 3; ++i) {
+    dma_tile_blob(SPIKER_TILES[i], (u16) (SPIKER_TILE_BASE + i), 32);
   }
   dma_tile_blob(SPR_SHOT, SHOT_TILE, sizeof SPR_SHOT);
   /* All 16 player claws packed contiguously starting at PLAYER_TILE_BASE. */
@@ -911,7 +920,34 @@ void render_sprites(void)
     emit_sprite_depth(spr_buf, n++, &sz, px, py, e->depth_fp);
   }
 
-  /* Pass 7: DEBRIS — death-burst particles. Origin is the snapshotted
+  /* Pass 7: SPIKERS — small fast enemy, 3 depth tiers, no rotation. */
+  for (Entity * e = g_active_head; e; e = e->next) {
+    if (e->type != E_SPIKER || n >= SPR_MAX) continue;
+    s16 px = web_pixel_x(e->lane, e->depth_fp);
+    s16 py = web_pixel_y(e->lane, e->depth_fp);
+    u8 tier = (e->depth_fp < 0x5555) ? 0
+            : (e->depth_fp < 0xAAAA) ? 1 : 2;
+    SpriteSizeDef sz = { SPR_SIZE_1x1,
+                         (u16) (SPIKER_TILE_BASE + tier),
+                         4 };
+    emit_sprite_depth(spr_buf, n++, &sz, px, py, e->depth_fp);
+  }
+
+  /* Pass 8: SPIKES — one marker per lane at the spike's tip. The spike
+   * isn't an entity; its outer-edge depth lives in g_spike_depth[]. The
+   * marker blinks (every other frame skip) while g_spike_flash > 0 → a
+   * brief visual response to being shot. */
+  extern fp16 g_spike_depth[MAX_LANES];
+  extern u8   g_spike_flash[MAX_LANES];
+  for (u8 k = 0; k < g_lane_count && n < SPR_MAX; ++k) {
+    if (g_spike_depth[k] <= 0) continue;
+    if (g_spike_flash[k] & 1)  continue;     /* blink frame — skip */
+    s16 px = web_pixel_x(k, g_spike_depth[k]);
+    s16 py = web_pixel_y(k, g_spike_depth[k]);
+    emit_sprite_depth(spr_buf, n++, &SHOT_SIZE, px, py, g_spike_depth[k]);
+  }
+
+  /* Pass 9: DEBRIS — death-burst particles. Origin is the snapshotted
    * claw position (g_death_x/y, written by main.c on death). Each particle
    * stores accumulated x-offset in depth_fp and y-offset in depth_vel_fp;
    * we just add to the origin and render as a 1x1 shot tile. */

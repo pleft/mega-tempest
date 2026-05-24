@@ -189,6 +189,9 @@ static u32 g_rng = 0xCAFEF00Du;
 #define PULSAR_OUT_STEP    (FP_ONE >> 8)   // 256 ticks centre->rim (~4.3 sec) — same as flipper
 #define FUSEBALL_STEP      (FP_ONE >> 9)   // slower base velocity (it flips direction often)
 #define FUSEBALL_HOP_PERIOD 30             // ticks between random direction/lane changes
+#define SPIKER_OUT_STEP    (FP_ONE >> 7)   // ~2 sec rim — fast painter
+#define SPIKE_CUT_AMOUNT   (FP_ONE >> 2)   // shot trims this much off a spike's tip
+#define SPIKE_KILL_THRESH  (FP_ONE - HIT_DEPTH_TOL)  /* spike-at-rim kills player */
 #define FLIPPER_RIM_HOP    12              // frames between rim-walk hops
 #define FLIPPER_SPAWN_PERIOD 150           // ~2.5 sec at 60 Hz
 #define ENEMY_MAX_ACTIVE   3
@@ -207,6 +210,16 @@ static const s8 DEBRIS_DY[DEBRIS_DIRS] = {  0, -2, -3, -2,  0,  2,  3,  2 };
 s16 g_death_x;                    // exposed to web.c's render_sprites
 s16 g_death_y;
 u8  g_respawn_timer;              // >0 = player is dead and counting down
+
+/* Per-lane spike state — outer-edge depth (0 = no spike, FP_ONE = at rim).
+ * Painted by spikers as they descend their lane; trimmed by shots. */
+fp16 g_spike_depth[MAX_LANES];
+
+/* Hit-flash counter per lane. Set on shot-cut; counts down each tick.
+ * Render skips the spike marker every other frame while non-zero →
+ * blink effect matching the Jag's flashcol behaviour. */
+#define SPIKE_FLASH_FRAMES 8
+u8 g_spike_flash[MAX_LANES];
 
 static u16 lcg(void)
 {
@@ -286,6 +299,20 @@ static void spawn_fuseball(u8 lane)
   g_enemy_count++;
 }
 
+static void spawn_spiker(u8 lane)
+{
+  Entity * e = entity_spawn();
+  if (!e) return;
+  e->type         = E_SPIKER;
+  e->lane         = lane;
+  e->depth_fp     = 0;
+  e->depth_vel_fp = +SPIKER_OUT_STEP;
+  e->phase        = 0;
+  e->step_period  = 0;
+  e->lifetime     = 0;
+  g_enemy_count++;
+}
+
 /* Shot hit a tanker — spawn 2 flippers on adjacent lanes at the tanker's
  * current depth and kill the tanker. */
 static void split_tanker(Entity * t)
@@ -359,6 +386,7 @@ static void install_playfield(void)
   g_score = 0;
   g_lives = LIVES_START;
   g_respawn_timer = 0;
+  for (u8 k = 0; k < MAX_LANES; ++k) { g_spike_depth[k] = 0; g_spike_flash[k] = 0; }
 
   /* Stop any leftover music NOW so the LOADING screen is silent.
    * The new MOD is uploaded + started AFTER all rendering finishes
@@ -416,6 +444,10 @@ static void install_playfield(void)
 static void play_gated_vblank(void)
 {
   g_anim_frame++;     /* drives flipper rotation (4 frames, 8 ticks each) */
+
+  /* Tick spike hit-flash counters. */
+  for (u8 k = 0; k < MAX_LANES; ++k)
+    if (g_spike_flash[k]) g_spike_flash[k]--;
 
   /* Input + fire gated by respawn timer — while dead, the player can't
    * move or shoot. Spawn loop and entity tick keep running so debris
@@ -478,6 +510,7 @@ static void play_gated_vblank(void)
     if      (r == 0) spawn_tanker(lane);
     else if (r == 1) spawn_pulsar(lane);
     else if (r == 2) spawn_fuseball(lane);
+    else if (r == 3) spawn_spiker(lane);
     else             spawn_flipper(lane);
     g_spawn_timer = FLIPPER_SPAWN_PERIOD;
   }
@@ -529,6 +562,13 @@ static void play_gated_vblank(void)
           e->phase        = 1;
         }
       }
+    } else if (e->type == E_SPIKER) {
+      /* Descend; paint the spike on this lane up to my current depth.
+       * On reaching the rim, despawn — the spike persists. */
+      e->depth_fp += e->depth_vel_fp;
+      if (e->depth_fp > g_spike_depth[e->lane])
+        g_spike_depth[e->lane] = e->depth_fp;
+      if (e->depth_fp >= FP_ONE) kill_enemy(e);
     } else if (e->type == E_FUSEBALL) {
       /* Erratic — drifts in/out, hops to adjacent lane at random
        * intervals. lifetime ticks down between decision points. */
@@ -575,7 +615,8 @@ static void play_gated_vblank(void)
       while (f) {
         Entity * f_next = f->next;
         if ((f->type == E_FLIPPER || f->type == E_TANKER ||
-             f->type == E_PULSAR  || f->type == E_FUSEBALL)
+             f->type == E_PULSAR  || f->type == E_FUSEBALL ||
+             f->type == E_SPIKER)
             && f->lane == s->lane) {
           fp16 d = s->depth_fp - f->depth_fp;
           if (d < 0) d = -d;
@@ -584,6 +625,7 @@ static void play_gated_vblank(void)
             if      (f->type == E_TANKER)   { split_tanker(f); g_score += 2; }
             else if (f->type == E_PULSAR)   { kill_enemy(f);   g_score += 3; }
             else if (f->type == E_FUSEBALL) { kill_enemy(f);   g_score += 4; }
+            else if (f->type == E_SPIKER)   { kill_enemy(f);   g_score += 2; }
             else                            { kill_enemy(f);   g_score++;    }
             if (g_mcd_present) mcd_play_sfx(1);    /* 1 = HIT — PCM */
             else               sfx_hit();           /* PSG fallback */
@@ -594,6 +636,43 @@ static void play_gated_vblank(void)
       }
     }
     s = s_next;
+  }
+
+  /* Shot↔spike trimming — separate pass because spikes aren't entities.
+   * Each shot at a lane with a spike whose tip the shot has overtaken
+   * trims the spike by SPIKE_CUT_AMOUNT and scores +1. */
+  Entity * ss = g_active_head;
+  while (ss) {
+    Entity * ss_next = ss->next;
+    if (ss->type == E_SHOT && g_spike_depth[ss->lane] > 0) {
+      if (ss->depth_fp <= g_spike_depth[ss->lane]) {
+        g_spike_depth[ss->lane] -= SPIKE_CUT_AMOUNT;
+        if (g_spike_depth[ss->lane] < 0) g_spike_depth[ss->lane] = 0;
+        g_spike_flash[ss->lane] = SPIKE_FLASH_FRAMES;     /* trigger blink */
+        entity_kill(ss);
+        g_score += 2;                                      /* Jag: +2 per cut */
+        if (g_mcd_present) mcd_play_sfx(1);
+        else               sfx_hit();
+      }
+    }
+    ss = ss_next;
+  }
+
+  /* Spike-at-rim on player's lane → death. Handled before the enemy-rim
+   * check so a spike alone is enough to kill (no enemy needed). */
+  if (g_player && g_respawn_timer == 0 &&
+      g_spike_depth[g_player_lane] >= SPIKE_KILL_THRESH) {
+    g_death_x = web_pixel_x(g_player_lane, FP_ONE);
+    g_death_y = web_pixel_y(g_player_lane, FP_ONE);
+    spawn_debris_burst();
+    g_respawn_timer = RESPAWN_DELAY;
+#if !INFINITE_LIVES
+    if (g_lives) g_lives--;
+#endif
+    /* Reset the spike so respawn isn't instant-death. */
+    g_spike_depth[g_player_lane] = 0;
+    if (g_mcd_present) mcd_play_sfx(2);
+    else               sfx_death();
   }
 
   // Flipper-at-rim on player's lane → death (delayed respawn).

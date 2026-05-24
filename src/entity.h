@@ -35,6 +35,10 @@ typedef enum {
                     // adjacent lanes at random intervals. lifetime =
                     // ticks until next direction/lane change.
                     // phase 0 = roaming, 1 = at rim (kills like flipper).
+  E_SPIKER   = 8,   // small fast enemy that paints a spike onto its lane
+                    // as it descends. The spike lives in g_spike_depth[]
+                    // (not an entity); spiker despawns on reaching rim.
+                    // Uses lane/depth_fp/depth_vel_fp same as flipper.
 } EntityType;
 
 struct Entity {

@@ -70,7 +70,15 @@ for tier, scale in [(0, 0.45), (1, 0.70), (2, 1.0)]:
         FUSEBALL_FRAMES.append(
             (f"fuseball_t{tier}_f{f}", label, verts_label, 0.0, 1, PAL_GREEN, scale))
 
-SPRITES = FLIPPER_FRAMES + TANKER_FRAMES + PULSAR_FRAMES + FUSEBALL_FRAMES + [
+# Spiker tile pack: 3 size tiers × 1 frame, white. Uses `arr` polygon
+# (small arrow shape) — the Jag's spiker enemy emits spikes as it
+# descends a lane. Mapped to PAL_WHITE.
+SPIKER_FRAMES = [
+    (f"spiker_t{tier}", "arr", "arrvert", 0.0, 1, PAL_WHITE, scale)
+    for tier, scale in [(0, 0.45), (1, 0.70), (2, 1.0)]
+]
+
+SPRITES = FLIPPER_FRAMES + TANKER_FRAMES + PULSAR_FRAMES + FUSEBALL_FRAMES + SPIKER_FRAMES + [
     ("shot",      "pshot",     "pshotverts", 0.0, 1, PAL_WHITE, 1.0),
 ] + [
     # 16 lane-specific claw rotations. `-lane * π/8` in y-down screen coords
