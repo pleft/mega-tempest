@@ -136,6 +136,8 @@ static u8  g_scene_dirty;     // set by install_*; main loop redraws static text
 static void install_title(void);
 static void title_main_thread(void);
 static void play_main_thread(void);
+static void install_gameover(void);
+static void gameover_main_thread(void);
 
 // ---- Scene: TITLE ---------------------------------------------------------
 
@@ -168,7 +170,13 @@ static u8  g_fire_cooldown;      // frames until next shot allowed
 static u16 g_spawn_timer;        // frames until next flipper spawn
 static u8  g_flipper_count;
 static u16 g_score;
+static u8  g_lives;              // remaining lives — game over at 0
 static u32 g_rng = 0xCAFEF00Du;
+
+/* Debug switch — set to 1 to disable game-over (lives never decrement,
+ * the player respawns indefinitely). Set to 0 for the actual game. */
+#define INFINITE_LIVES     0
+#define LIVES_START        3
 #define LANE_HOLD_INITIAL 14     // frames before first repeat after first press
 #define LANE_HOLD_REPEAT   4     // frames between subsequent repeats
 #define FIRE_COOLDOWN      6     // frames between shots
@@ -278,6 +286,7 @@ static void install_playfield(void)
   g_spawn_timer  = FLIPPER_SPAWN_PERIOD;
   g_flipper_count = 0;
   g_score = 0;
+  g_lives = LIVES_START;
   g_respawn_timer = 0;
 
   // Kick off music for the round (Mega CD only — gracefully silent on plain MD).
@@ -459,6 +468,9 @@ static void play_gated_vblank(void)
         spawn_debris_burst();
         kill_flipper(f);
         g_respawn_timer = RESPAWN_DELAY;       /* freeze + hide player */
+#if !INFINITE_LIVES
+        if (g_lives) g_lives--;
+#endif
         if (g_mcd_present) mcd_play_sfx(2);    /* 2 = DEATH — PCM */
         else               sfx_death();         /* PSG fallback */
         break;
@@ -467,11 +479,16 @@ static void play_gated_vblank(void)
     }
   }
 
-  /* Respawn timer countdown — on hitting zero, snap the claw back to
-   * the shape's default starting lane and bring the player back to life. */
+  /* Respawn timer countdown — on hitting zero, either bring the player
+   * back to life at the default lane OR transition to game-over if all
+   * lives are spent. */
   if (g_respawn_timer) {
     g_respawn_timer--;
     if (g_respawn_timer == 0) {
+      if (g_lives == 0) {
+        install_gameover();
+        return;
+      }
       u8 start_lane = web_default_start_lane();
       g_player_lane = start_lane;
       if (g_player) g_player->lane = start_lane;
@@ -508,6 +525,7 @@ static void play_main_thread(void)
   if (g_scene_dirty) {
     clear_play_area();
     print("SCORE:", plane_xy(28, 27));
+    print("LIVES:", plane_xy( 2, 27));
     g_scene_dirty = 0;
   }
 
@@ -517,6 +535,9 @@ static void play_main_thread(void)
   plane_putc(36, 27, (char) ('0' + (s % 10))); s /= 10;
   plane_putc(35, 27, (char) ('0' + (s % 10))); s /= 10;
   plane_putc(34, 27, (char) ('0' + (s % 10)));
+
+  // Lives readout — single digit (capped to 9 for safety).
+  plane_putc(9, 27, (char) ('0' + (g_lives > 9 ? 9 : g_lives)));
 
 
   /* Pick pre-baked variant matching player's target lane (after slide).
@@ -547,6 +568,49 @@ static void play_main_thread(void)
   render_sprites();
 
   if (p1_single & PAD_B) install_title();
+}
+
+// ---- Scene: GAME OVER -----------------------------------------------------
+
+static void install_gameover(void)
+{
+  g_engine.always_vblank = 0;
+  g_engine.gated_vblank  = 0;
+  g_engine.main_thread   = gameover_main_thread;
+  g_engine.paused        = 0;
+  g_scene_dirty          = 1;
+
+  /* Stop music. */
+  if (g_mcd_present && g_music_playing) {
+    mcd_stop_mod();
+    mcd_wait_ack(CMD_STOP_MOD);
+    g_music_playing = 0;
+  }
+
+  /* Clear sprite attribute table so leftover entities from the play
+   * scene don't linger on screen. */
+  vdp_ctrl_32 = to_vdp_addr(0xb800) | VRAM_W;
+  vdp_data = 0; vdp_data = 0; vdp_data = 0; vdp_data = 0;
+}
+
+static void gameover_main_thread(void)
+{
+  if (g_scene_dirty) {
+    clear_play_area();
+    print("GAME OVER",   plane_xy(15, 12));
+    print("SCORE",       plane_xy(15, 15));
+    print("PRESS START", plane_xy(14, 19));
+    g_scene_dirty = 0;
+  }
+
+  /* Score digits sit right after "SCORE " on the same row. */
+  u16 s = g_score;
+  plane_putc(24, 15, (char) ('0' + (s % 10))); s /= 10;
+  plane_putc(23, 15, (char) ('0' + (s % 10))); s /= 10;
+  plane_putc(22, 15, (char) ('0' + (s % 10))); s /= 10;
+  plane_putc(21, 15, (char) ('0' + (s % 10)));
+
+  if (p1_single & PAD_START) install_title();
 }
 
 // ---- main -----------------------------------------------------------------
