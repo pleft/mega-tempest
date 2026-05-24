@@ -37,6 +37,25 @@ run_megadev_make "$HERE" "${MAKE_ARGS[@]:-}"
 
 ROM="$HERE/tempest.cart"
 [ -f "$ROM" ] || { echo "build: $ROM not produced"; exit 1; }
+
+# Trim the 16 MB zero-padding that md_cart.ld forces objcopy to emit.
+# The LD script anchors .data at 0xFF0000, so the binary is padded out
+# to that offset. .data isn't loaded on main side anyway (megadev's main
+# bootloader doesn't copy .data → RAM), so it can be dropped safely.
+# Truncate to _rom_end (last byte of .rodata), rounded up to 256.
+ROM_END_HEX=$(awk '$3 == "_rom_end" && $2 == "T" { print $1 }' "$HERE/build/tempest.cart.sym")
+if [ -n "$ROM_END_HEX" ]; then
+  ROM_END_DEC=$((0x$ROM_END_HEX))
+  ROUND=256
+  CART_SIZE=$(( (ROM_END_DEC + ROUND - 1) / ROUND * ROUND ))
+  python3 -c "
+import os
+with open('$ROM', 'rb') as f: d = f.read($CART_SIZE)
+with open('$ROM', 'wb') as f: f.write(d)
+print(f'trimmed cart: {len(d)} bytes (was {os.path.getsize(\"$ROM\")+0:,} after trim)')
+"
+fi
+
 python3 -c "
 p='$ROM'
 d=bytearray(open(p,'rb').read())
