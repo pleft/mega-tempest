@@ -26,6 +26,11 @@ typedef enum {
                     // depth_fp, depth_vel_fp). Tankers don't rim-walk —
                     // they sit at the rim on reaching it and kill the
                     // player when the claw passes through that lane.
+  E_PULSAR  = 6,    // descends, cycles 3-frame pulse animation (driven
+                    // by g_anim_frame). When pulse hits peak (frame 2)
+                    // and pulsar is at the rim on the player's lane,
+                    // kills the player. Reuses lane/depth_fp/depth_vel_fp
+                    // /phase same as E_FLIPPER.
 } EntityType;
 
 struct Entity {

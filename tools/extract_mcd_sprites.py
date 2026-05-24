@@ -29,6 +29,7 @@ PAL_WHITE  = 1
 PAL_RED    = 2
 PAL_PINK   = 3
 PAL_YELLOW = 4
+PAL_CYAN   = 9     # set in main.c cram[9] = 0x0EE0 — pulsar
 
 # Flipper tile pack: 3 size tiers × 4 rotation frames (0°, 90°, 180°, 270°).
 # All output as 1x1 sprites; tier 0 = small dot (far), tier 2 = full 8x8 (near).
@@ -48,7 +49,18 @@ TANKER_FRAMES = [
     for tier, scale in [(0, 0.45), (1, 0.70), (2, 1.0)]
 ]
 
-SPRITES = FLIPPER_FRAMES + TANKER_FRAMES + [
+# Pulsar tile pack: 3 size tiers × 3 unique animation frames = 9 tiles.
+# Frames sampled at spuls1/3/5 (the original Jag pulse animation has 6
+# frames, but the in-between ones are visually similar — picking every
+# other one gives the same readability for half the VRAM cost).
+PULSAR_FRAMES = []
+for tier, scale in [(0, 0.45), (1, 0.70), (2, 1.0)]:
+    for f, label in enumerate(["spuls1", "spuls3", "spuls5"]):
+        verts_label = {"spuls1": "spv1", "spuls3": "spv3", "spuls5": "spv5"}[label]
+        PULSAR_FRAMES.append(
+            (f"pulsar_t{tier}_f{f}", label, verts_label, 0.0, 1, PAL_CYAN, scale))
+
+SPRITES = FLIPPER_FRAMES + TANKER_FRAMES + PULSAR_FRAMES + [
     ("shot",      "pshot",     "pshotverts", 0.0, 1, PAL_WHITE, 1.0),
 ] + [
     # 16 lane-specific claw rotations. `-lane * π/8` in y-down screen coords

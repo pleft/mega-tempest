@@ -22,6 +22,15 @@ extern const u8 SPR_FLIPPER_T2_F3[32];  /* 1x1, pal 2 */
 extern const u8 SPR_TANKER_T0[32];  /* 1x1, pal 3 */
 extern const u8 SPR_TANKER_T1[32];  /* 1x1, pal 3 */
 extern const u8 SPR_TANKER_T2[32];  /* 1x1, pal 3 */
+extern const u8 SPR_PULSAR_T0_F0[32];  /* 1x1, pal 9 */
+extern const u8 SPR_PULSAR_T0_F1[32];  /* 1x1, pal 9 */
+extern const u8 SPR_PULSAR_T0_F2[32];  /* 1x1, pal 9 */
+extern const u8 SPR_PULSAR_T1_F0[32];  /* 1x1, pal 9 */
+extern const u8 SPR_PULSAR_T1_F1[32];  /* 1x1, pal 9 */
+extern const u8 SPR_PULSAR_T1_F2[32];  /* 1x1, pal 9 */
+extern const u8 SPR_PULSAR_T2_F0[32];  /* 1x1, pal 9 */
+extern const u8 SPR_PULSAR_T2_F1[32];  /* 1x1, pal 9 */
+extern const u8 SPR_PULSAR_T2_F2[32];  /* 1x1, pal 9 */
 extern const u8 SPR_SHOT[32];  /* 1x1, pal 1 */
 extern const u8 SPR_PLAYER_L00[128];  /* 2x2, pal 4 */
 extern const u8 SPR_PLAYER_L01[128];  /* 2x2, pal 4 */

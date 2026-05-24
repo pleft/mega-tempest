@@ -52,6 +52,7 @@
 #define PLAYER_TILE_BASE    0x560       /* 16 × 4 tiles = 64 tiles, $560..$59F */
 #define SHOT_TILE           0x5A0       /* 8x8 = 1 tile, white shot */
 #define TANKER_TILE_BASE    0x5A1       /* 3 tiers × 1 frame = 3 tiles, $5A1..$5A3 */
+#define PULSAR_TILE_BASE    0x5A4       /* 3 tiers × 3 frames = 9 tiles, $5A4..$5AC */
 
 #define PLAYER_TILES_PER_LANE 4         /* 2x2 = 4 tiles per claw rotation */
 
@@ -761,6 +762,13 @@ static const u8 * const TANKER_TILES[3] = {
   SPR_TANKER_T0, SPR_TANKER_T1, SPR_TANKER_T2,
 };
 
+/* 3 tiers × 3 frames = 9 contiguous tiles. Index = tier*3 + frame. */
+static const u8 * const PULSAR_TILES[9] = {
+  SPR_PULSAR_T0_F0, SPR_PULSAR_T0_F1, SPR_PULSAR_T0_F2,
+  SPR_PULSAR_T1_F0, SPR_PULSAR_T1_F1, SPR_PULSAR_T1_F2,
+  SPR_PULSAR_T2_F0, SPR_PULSAR_T2_F1, SPR_PULSAR_T2_F2,
+};
+
 void load_sprite_tiles_to_vram(void)
 {
   for (u8 i = 0; i < 12; ++i) {
@@ -768,6 +776,9 @@ void load_sprite_tiles_to_vram(void)
   }
   for (u8 i = 0; i < 3; ++i) {
     dma_tile_blob(TANKER_TILES[i], (u16) (TANKER_TILE_BASE + i), 32);
+  }
+  for (u8 i = 0; i < 9; ++i) {
+    dma_tile_blob(PULSAR_TILES[i], (u16) (PULSAR_TILE_BASE + i), 32);
   }
   dma_tile_blob(SPR_SHOT, SHOT_TILE, sizeof SPR_SHOT);
   /* All 16 player claws packed contiguously starting at PLAYER_TILE_BASE. */
@@ -858,7 +869,24 @@ void render_sprites(void)
     emit_sprite_depth(spr_buf, n++, &sz, px, py, e->depth_fp);
   }
 
-  /* Pass 5: DEBRIS — death-burst particles. Origin is the snapshotted
+  /* Pass 5: PULSARS — 3 depth tiers × 3 frames; all pulsars in sync.
+   * Ping-pong 0→1→2→1 (4 phases × 16 game frames each = ~1 s cycle). */
+  static const u8 PULSAR_FRAME_MAP[4] = { 0, 1, 2, 1 };
+  u8 const pulsar_anim = (u8) ((g_anim_frame >> 4) & 0x3);
+  u8 const pulsar_frame = PULSAR_FRAME_MAP[pulsar_anim];
+  for (Entity * e = g_active_head; e; e = e->next) {
+    if (e->type != E_PULSAR || n >= SPR_MAX) continue;
+    s16 px = web_pixel_x(e->lane, e->depth_fp);
+    s16 py = web_pixel_y(e->lane, e->depth_fp);
+    u8 tier = (e->depth_fp < 0x5555) ? 0
+            : (e->depth_fp < 0xAAAA) ? 1 : 2;
+    SpriteSizeDef sz = { SPR_SIZE_1x1,
+                         (u16) (PULSAR_TILE_BASE + tier * 3 + pulsar_frame),
+                         4 };
+    emit_sprite_depth(spr_buf, n++, &sz, px, py, e->depth_fp);
+  }
+
+  /* Pass 6: DEBRIS — death-burst particles. Origin is the snapshotted
    * claw position (g_death_x/y, written by main.c on death). Each particle
    * stores accumulated x-offset in depth_fp and y-offset in depth_vel_fp;
    * we just add to the origin and render as a 1x1 shot tile. */
