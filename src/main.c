@@ -93,22 +93,71 @@ static u16 const default_vdp_regs[] = {
 
 static void print(char const * s, vdp_addr pos)
 {
+  /* priority=1 so plane-A text draws in front of the high-priority web. */
   vdp_ctrl_32 = pos;
-  while (*s) vdp_data = *s++;
+  while (*s) vdp_data = (u16) (0x8000 | (u8) *s++);
 }
 
 static void plane_putc(u16 cx, u16 cy, char c)
 {
   vdp_ctrl_32 = plane_xy(cx, cy);
-  vdp_data = (u8) c;
+  vdp_data = (u16) (0x8000 | (u8) c);
 }
 
 static void clear_play_area(void)
 {
-  for (u8 y = 4; y < 27; ++y) {
+  /* Full plane-A wipe + fresh star scatter. Each scene's main_thread
+   * calls this on its first frame to start from a clean background,
+   * then overlays its own text. The web (plane B, priority=1) and the
+   * sprites (priority=1 in emit_sprite_depth) draw IN FRONT of these
+   * stars, so stars fill all the natural gaps around the web. */
+  for (u8 y = 0; y < 28; ++y) {
     vdp_ctrl_32 = plane_xy(0, y);
     for (u8 x = 0; x < 40; ++x) vdp_data = ' ';
   }
+  /* Sparse star scatter at 1/4 density across the whole plane. */
+  u32 r = 0xCAFEF00Du;
+  for (u8 cy = 0; cy < 28; ++cy) {
+    for (u8 cx = 0; cx < 40; ++cx) {
+      r ^= r << 13; r ^= r >> 17; r ^= r << 5;
+      if ((r & 0x07) == 0) {                /* 1/8 density */
+        u16 tile = (u16) (0x10 + ((r >> 3) & 0x03));
+        vdp_ctrl_32 = plane_xy(cx, cy);
+        vdp_data = tile;
+      }
+    }
+  }
+}
+
+/* Live-starfield animation. Re-DMAs the 4 star tiles each shift step
+ * with the white pixel moved by 1 px diagonally. All stars on screen
+ * drift in lockstep — gives a "drifting through space" feel without
+ * plane scrolling (which would also move the HUD).
+ * 8-step cycle, 16 game frames per step ≈ 2.1 s per full cycle. */
+static void update_starfield(void)
+{
+  extern u8 g_anim_frame;
+  u8 const shift = (u8) ((g_anim_frame >> 3) & 0x7);   /* faster: ~1 s full cycle */
+  static u8 last_shift = 0xFF;
+  if (shift == last_shift) return;
+  last_shift = shift;
+
+  static const u8 BASE_XY[4][2] = { {2,1}, {6,3}, {2,6}, {4,4} };
+  static u8 buf[4 * 32];
+  for (u8 t = 0; t < 4; ++t) {
+    u8 x = (u8) ((BASE_XY[t][0] + shift) & 7);
+    u8 y = (u8) ((BASE_XY[t][1] + shift) & 7);
+    u8 * tile = &buf[t * 32];
+    for (u8 i = 0; i < 32; ++i) tile[i] = 0;
+    tile[y * 4 + (x >> 1)] = (u8) ((x & 1) ? 0x01 : 0x10);
+  }
+
+  u16 const mode2_dma_on = vdp_regs[1] | VDP_DMA_ENABLE;
+  vdp_ctrl = VDP_REG_AUTOINC | 2;
+  vdp_ctrl = mode2_dma_on;
+  vdp_dma_transfer((char const *) buf, to_vdp_addr(0x10 * 32) | VRAM_W,
+                   (u16) (sizeof(buf) / 2));
+  vdp_ctrl = vdp_regs[1];
 }
 
 // ---- Engine (doc 16) ------------------------------------------------------
@@ -444,6 +493,7 @@ static void install_playfield(void)
 static void play_gated_vblank(void)
 {
   g_anim_frame++;     /* drives flipper rotation (4 frames, 8 ticks each) */
+  update_starfield(); /* drifts star dots through the cell once per ~2 s */
 
   /* Tick spike hit-flash counters. */
   for (u8 k = 0; k < MAX_LANES; ++k)
@@ -907,28 +957,9 @@ void main(void)
                    (u16) ((sizeof STAR_TILES) / 2));
   vdp_ctrl = mode2_display_off;
 
-  /* Paint plane A with a sparse, pseudo-random scatter of star tiles in
-   * cells OUTSIDE the web region (cells 7..32, 1..26). Inside the web
-   * region we leave plane A transparent so the filled web on plane B
-   * shows through. Uses 32-bit xorshift with the classic (13,17,5)
-   * constants — the previous 16-bit version had a short cycle and
-   * clustered all matches at the end of the iteration. */
-  {
-    u32 r = 0xCAFEF00Du;
-    for (u8 cy = 0; cy < 28; ++cy) {
-      for (u8 cx = 0; cx < 40; ++cx) {
-        if (cx >= 7 && cx <= 32 && cy >= 1 && cy <= 26) continue;
-        r ^= r << 13;
-        r ^= r >> 17;
-        r ^= r << 5;
-        if ((r & 0x0F) == 0) {                 /* ~1/16 of cells = a star */
-          u16 tile = (u16) (0x10 + ((r >> 4) & 0x03));   /* 4 variants */
-          vdp_ctrl_32 = plane_xy(cx, cy);
-          vdp_data = tile;
-        }
-      }
-    }
-  }
+  /* Star scatter on plane A is now painted per-scene by clear_play_area
+   * — full-screen scatter with the web + sprites drawing in front via
+   * priority=1. No boot-time paint needed. */
 
   g_mcd_present = detect_mega_cd();
   if (g_mcd_present) mcd_init();

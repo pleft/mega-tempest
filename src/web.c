@@ -681,11 +681,12 @@ void web_dma_main_to_vram(void)
 void web_paint_plane_b(void)
 {
   vdp_ctrl = VDP_REG_AUTOINC | 2;
+  /* priority=1 (0x8000) so the web draws in front of plane A stars. */
   for (u8 row = 0; row < WEB_CELLS_H; ++row) {
     u16 plane_b_addr = 0x4000 + ((PLANE_B_PAINT_ROW + row) * 64 + PLANE_B_PAINT_COL) * 2;
     vdp_ctrl_32 = to_vdp_addr(plane_b_addr) | VRAM_W;
     for (u8 col = 0; col < WEB_CELLS_W; ++col)
-      vdp_data = (u16) (ROT_TILE_BASE_IDX + row * WEB_CELLS_W + col);
+      vdp_data = (u16) (0x8000 | (ROT_TILE_BASE_IDX + row * WEB_CELLS_W + col));
   }
 }
 
@@ -824,7 +825,7 @@ static inline void emit_sprite_depth(u16 * buf, u8 idx, const SpriteSizeDef * sz
   (void) depth_fp;
   buf[idx * 4 + 0] = (u16) (py + 128 - sz->half);                     /* Y */
   buf[idx * 4 + 1] = (u16) (((u16) sz->size_byte << 8) | (idx + 1));  /* size + link */
-  buf[idx * 4 + 2] = sz->tile_base;                                   /* tile */
+  buf[idx * 4 + 2] = (u16) (0x8000 | sz->tile_base);                  /* tile + pri=1 */
   buf[idx * 4 + 3] = (u16) (px + 128 - sz->half);                     /* X */
 }
 
