@@ -225,6 +225,51 @@ static u8  g_lives;              // remaining lives — game over at 0
 u8         g_anim_frame;         // global frame counter — drives flipper rotation
 static u32 g_rng = 0xCAFEF00Du;
 
+/* ---- Wave system ---------------------------------------------------------
+ * Each wave declares a per-type spawn quota + pacing. The spawn picker
+ * draws from g_pool[] (random non-empty slot). When all pools are 0 AND
+ * no enemies are alive, the wave is cleared and next_wave() advances.
+ * Web shape rotates by g_wave_num % WEB_SHAPE_COUNT. */
+typedef struct {
+  u8  num_flippers;
+  u8  num_tankers;
+  u8  num_pulsars;
+  u8  num_fuseballs;
+  u8  num_spikers;
+  u16 spawn_period;     // ticks between spawns (smaller = faster)
+  u8  max_active;       // concurrent enemy cap
+} WaveDef;
+
+static const WaveDef WAVES[16] = {
+  /* flip tank puls fuse spik  period  max  | wave  shape  */
+  {   5,   0,   0,   0,   0,   150,    2 }, /*  W1   V       — gentle intro    */
+  {   8,   0,   0,   0,   0,   140,    3 }, /*  W2   SQUARE                    */
+  {   6,   2,   0,   0,   0,   130,    3 }, /*  W3   PLUS    — + tanker        */
+  {   8,   2,   1,   0,   0,   120,    3 }, /*  W4   TRIANG  — + pulsar        */
+  {   8,   2,   2,   1,   0,   120,    3 }, /*  W5   PENTA   — + fuseball      */
+  {   8,   3,   2,   1,   1,   110,    4 }, /*  W6   STAR    — + spiker        */
+  {  10,   3,   2,   2,   1,   100,    4 }, /*  W7   W                         */
+  {  10,   3,   3,   2,   1,    90,    4 }, /*  W8   FAN                       */
+  {  10,   4,   3,   2,   2,    90,    4 }, /*  W9   V (rep)                   */
+  {  12,   4,   3,   3,   2,    80,    5 }, /* W10                             */
+  {  12,   4,   4,   3,   2,    80,    5 }, /* W11                             */
+  {  12,   5,   4,   3,   3,    75,    5 }, /* W12                             */
+  {  14,   5,   4,   4,   3,    70,    5 }, /* W13                             */
+  {  14,   5,   5,   4,   3,    70,    5 }, /* W14                             */
+  {  16,   6,   5,   4,   4,    65,    6 }, /* W15                             */
+  {  16,   6,   5,   5,   4,    60,    6 }, /* W16   FAN     — final           */
+};
+
+static u16 g_wave_num;          // 0-indexed wave (wraps mod 16 for shape)
+static u8  g_pool[5];           // remaining-to-spawn: [flipper, tanker, pulsar, fuseball, spiker]
+static u8  g_wave_clear_timer;  // counts up while wave-clear conditions hold
+#define WAVE_CLEAR_DELAY 60     // 1 sec of empty-web pause before LOADING fires
+#define POOL_FLIPPER  0
+#define POOL_TANKER   1
+#define POOL_PULSAR   2
+#define POOL_FUSEBALL 3
+#define POOL_SPIKER   4
+
 /* Debug switch — set to 1 to disable game-over (lives never decrement,
  * the player respawns indefinitely). Set to 0 for the actual game. */
 #define INFINITE_LIVES     0
@@ -362,6 +407,79 @@ static void spawn_spiker(u8 lane)
   g_enemy_count++;
 }
 
+/* Total enemies remaining in the spawn pool. */
+static u16 pool_total(void)
+{
+  return (u16) (g_pool[0] + g_pool[1] + g_pool[2] + g_pool[3] + g_pool[4]);
+}
+
+/* Refill g_pool[] from WAVES[wave_idx] and set the wave's spawn period.
+ * Per-wave shape rotation comes from g_wave_num % WEB_SHAPE_COUNT. */
+static void load_wave_pool(u16 wave_idx)
+{
+  u8 t = (u8) (wave_idx & 0x0F);    /* WAVES table is 16 entries — wrap */
+  g_pool[POOL_FLIPPER]  = WAVES[t].num_flippers;
+  g_pool[POOL_TANKER]   = WAVES[t].num_tankers;
+  g_pool[POOL_PULSAR]   = WAVES[t].num_pulsars;
+  g_pool[POOL_FUSEBALL] = WAVES[t].num_fuseballs;
+  g_pool[POOL_SPIKER]   = WAVES[t].num_spikers;
+  g_spawn_timer = WAVES[t].spawn_period;
+}
+
+/* Advance to the next wave: clear active enemies + spikes, swap web shape,
+ * re-bake variants, refill pool. ~6-10 s freeze on the bake (no fly-down
+ * transition yet — see project_megacd_port memory for future polish). */
+static void next_wave(void)
+{
+  /* Kill all enemy entities (preserve player). */
+  Entity * e = g_active_head;
+  while (e) {
+    Entity * next = e->next;
+    if (e->type == E_FLIPPER || e->type == E_TANKER ||
+        e->type == E_PULSAR  || e->type == E_FUSEBALL ||
+        e->type == E_SPIKER  || e->type == E_DEBRIS) {
+      entity_kill(e);
+    }
+    e = next;
+  }
+  g_enemy_count = 0;
+  for (u8 k = 0; k < MAX_LANES; ++k) { g_spike_depth[k] = 0; g_spike_flash[k] = 0; }
+
+  g_wave_num++;
+  g_web_shape = (u8) (g_wave_num % WEB_SHAPE_COUNT);
+
+  /* Re-bake the web for the new shape. Show LOADING + run the same
+   * variant-bake pipeline install_playfield uses. */
+  clear_play_area();
+  print("LOADING...", plane_xy(15, 14));
+  /* Wipe the sprite attribute table so leftover entities from the
+   * previous frame don't linger on the LOADING screen during the bake. */
+  vdp_ctrl_32 = to_vdp_addr(0xb800) | VRAM_W;
+  vdp_data = 0; vdp_data = 0; vdp_data = 0; vdp_data = 0;
+  web_init();
+  g_player_lane = web_default_start_lane();
+  web_player_snap_to(g_player_lane);
+  if (g_player) g_player->lane = g_player_lane;
+  g_vp_x = 0; g_vp_y = 0;
+  if (g_mcd_present) {
+    web_clear_plane_b();
+    mcd_prebake_web_variants(4);
+    web_project();
+    mcd_dma_variant_to_vram(0);
+    web_paint_plane_b();
+  } else {
+    web_render_main(4);
+    web_dma_main_to_vram();
+    web_paint_plane_b();
+  }
+  vdp_ctrl_32 = to_vdp_addr(1 * 2) | CRAM_W;
+  vdp_data    = 0x0EEE;    /* reset cram[1] in case the bake pulsed it */
+
+  load_wave_pool(g_wave_num);
+  g_wave_clear_timer = 0;
+  g_scene_dirty = 1;       /* repaint HUD next frame */
+}
+
 /* Shot hit a tanker — spawn 2 flippers on adjacent lanes at the tanker's
  * current depth and kill the tanker. */
 static void split_tanker(Entity * t)
@@ -423,6 +541,12 @@ static void install_playfield(void)
   pool_init();
   g_vp_x = 0;
   g_vp_y = 0;
+  /* Start at wave 0 — set shape BEFORE web_init so it reads the wave's
+   * shape. Subsequent waves go through next_wave() which does its own
+   * re-init. */
+  g_wave_num  = 0;
+  g_web_shape = (u8) (g_wave_num % WEB_SHAPE_COUNT);
+  load_wave_pool(g_wave_num);
   web_init();
   /* Pick the bottom-centre lane as the spawn point and snap the claw
    * slide animation to it (web_init resets slide state to lane 0). */
@@ -430,7 +554,6 @@ static void install_playfield(void)
   web_player_snap_to(g_player_lane);
   g_left_tick = g_right_tick = 0;
   g_fire_cooldown = 0;
-  g_spawn_timer  = FLIPPER_SPAWN_PERIOD;
   g_enemy_count = 0;
   g_score = 0;
   g_lives = LIVES_START;
@@ -546,23 +669,36 @@ static void play_gated_vblank(void)
     }
   }
 
-  // Spawn an enemy every spawn_period frames, capped. ~1 in 8 spawn
-  // slots produces a tanker instead of a flipper.
+  // Spawn an enemy from the wave's pool. Per-wave spawn_period + max_active
+  // are read from WAVES[g_wave_num & 0x0F]. Pick a random pool slot that
+  // has remaining quota; if every slot is empty, no spawn (wave is winding
+  // down — wave-clear check happens after the entity tick).
+  u8 const wave_t = (u8) (g_wave_num & 0x0F);
   if (g_spawn_timer) g_spawn_timer--;
-  if (g_spawn_timer == 0 && g_enemy_count < ENEMY_MAX_ACTIVE) {
-    /* Pick a random lane in [0, lane_count). lcg() & 0x1F gives 0..31;
-     * clamp into the valid range with a couple of subtractions to keep
-     * us off __umodsi3. Slight bias toward low lanes is fine here. */
+  if (g_spawn_timer == 0 &&
+      g_enemy_count < WAVES[wave_t].max_active &&
+      pool_total() > 0) {
+    /* Pick a random lane in [0, lane_count). */
     u8 lane = (u8) (lcg() & 0x1F);
     u8 lc   = web_lane_count();
     while (lane >= lc) lane = (u8) (lane - lc);
-    u16 r = lcg() & 0x7;
-    if      (r == 0) spawn_tanker(lane);
-    else if (r == 1) spawn_pulsar(lane);
-    else if (r == 2) spawn_fuseball(lane);
-    else if (r == 3) spawn_spiker(lane);
-    else             spawn_flipper(lane);
-    g_spawn_timer = FLIPPER_SPAWN_PERIOD;
+    /* Pick a pool slot — random start, walk to first non-empty. */
+    u8 start = (u8) (lcg() & 0x7);
+    for (u8 i = 0; i < 5; ++i) {
+      u8 slot = (u8) (start + i);
+      while (slot >= 5) slot = (u8) (slot - 5);
+      if (g_pool[slot] == 0) continue;
+      g_pool[slot]--;
+      switch (slot) {
+        case POOL_FLIPPER:  spawn_flipper(lane);  break;
+        case POOL_TANKER:   spawn_tanker(lane);   break;
+        case POOL_PULSAR:   spawn_pulsar(lane);   break;
+        case POOL_FUSEBALL: spawn_fuseball(lane); break;
+        case POOL_SPIKER:   spawn_spiker(lane);   break;
+      }
+      break;
+    }
+    g_spawn_timer = WAVES[wave_t].spawn_period;
   }
 
   // Tick shots and flippers.
@@ -757,6 +893,20 @@ static void play_gated_vblank(void)
     }
   }
 
+  /* Wave-clear: pool exhausted + no live enemies. Hold for
+   * WAVE_CLEAR_DELAY frames (~1 s) of empty-web pause before kicking
+   * the LOADING transition — feels less abrupt than firing instantly.
+   * Resets if any of the conditions stop holding. */
+  if (g_respawn_timer == 0 && pool_total() == 0 && g_enemy_count == 0) {
+    g_wave_clear_timer++;
+    if (g_wave_clear_timer >= WAVE_CLEAR_DELAY) {
+      next_wave();
+      return;
+    }
+  } else {
+    g_wave_clear_timer = 0;
+  }
+
   /* Respawn timer countdown — on hitting zero, either bring the player
    * back to life at the default lane OR transition to game-over if all
    * lives are spent. */
@@ -804,6 +954,7 @@ static void play_main_thread(void)
     clear_play_area();
     print("SCORE:", plane_xy(28, 27));
     print("LIVES:", plane_xy( 2, 27));
+    print("WAVE:",  plane_xy(15, 27));
     g_scene_dirty = 0;
   }
 
@@ -816,6 +967,11 @@ static void play_main_thread(void)
 
   // Lives readout — single digit (capped to 9 for safety).
   plane_putc(9, 27, (char) ('0' + (g_lives > 9 ? 9 : g_lives)));
+
+  // Wave readout — 2 digits, 1-based display.
+  u16 w = (u16) (g_wave_num + 1);
+  plane_putc(22, 27, (char) ('0' + (w % 10))); w /= 10;
+  plane_putc(21, 27, (char) ('0' + (w % 10)));
 
 
   /* Pick pre-baked variant matching player's target lane (after slide).
