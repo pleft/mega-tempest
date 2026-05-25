@@ -503,12 +503,24 @@ static const int8_t WEB_RIM[16][2] = {
 typedef struct { int16_t x, y, dx, dy; } asic_trace;
 
 /* Common per-frame ASIC config. Caller has already populated the trace
- * table via fill_trace_*. */
-static void asic_kick(void)
+ * table via fill_trace_*. `repeat` non-zero = stamp map wraps (good for
+ * warps where the trace may step past the source edge); zero = samples
+ * outside the source produce blank (clean for zoom-out).
+ *
+ * When repeat=0, the ASIC SKIPS writing output pixels whose trace lands
+ * outside the populated stamp map — leftover IMG content from prior
+ * renders bleeds through. Clear the IMG buffer first so the periphery
+ * reads as zero (transparent through priority=1 plane B). */
+static void asic_kick(uint8_t repeat)
 {
+  if (!repeat) {
+    uint32_t * img = (uint32_t *) (WORD_RAM_SUB + ASIC_IMG_OFF);
+    for (uint16_t i = 0; i < (ASIC_IMG_W * ASIC_IMG_H / 2) / 4; ++i) img[i] = 0;
+  }
   *ga_reg_stampmapbase    = (uint16_t) (ASIC_STAMP_MAP_OFF / 4);
   *ga_reg_imgbufstart     = (uint16_t) (ASIC_IMG_OFF / 4);
-  *ga_reg_stampsize       = GA_MASK_STAMPSIZE_REPEAT | GA_MASK_STAMPSIZE_32x32_STAMP;
+  *ga_reg_stampsize       = (repeat ? GA_MASK_STAMPSIZE_REPEAT : 0)
+                          | GA_MASK_STAMPSIZE_32x32_STAMP;
   *ga_reg_imgbufvdotsize  = ASIC_IMG_H;
   *ga_reg_imgbufhdotsize  = ASIC_IMG_W;
   *ga_reg_imgbufvsize     = (ASIC_IMG_H / 8) - 1;
@@ -529,7 +541,7 @@ static void render_rot(void)
     trace[L].dx = (int16_t) 0x0800;
     trace[L].dy = 0;
   }
-  asic_kick();
+  asic_kick(1);    /* identity: source stays in bounds, repeat doesn't matter */
   grant_2m_sub();
 }
 
@@ -555,7 +567,33 @@ static void render_tilt(int16_t tilt_x, int16_t tilt_y)
     trace[L].dx = (int16_t) 0x0800;
     trace[L].dy = 0;
   }
-  asic_kick();
+  asic_kick(1);    /* tilt: shifted x may step past source edge — repeat */
+  grant_2m_sub();
+}
+
+/* Uniform-scale zoom. dx in 5.11 (0x0800 = identity). dx > 0x0800 →
+ * web shrinks toward source centre; dx < 0x0800 → enlarges.
+ * x_start computed so the source centre stays at output centre. */
+static void render_scale(int16_t dx)
+{
+  wait_2m_sub();
+  asic_trace * trace = (asic_trace *) (WORD_RAM_SUB + ASIC_TRACE_OFF);
+  /* Centre source pixel = IMG_W/2 = 80. We want source pixel 80 at output
+   * pixel 80. Output column C samples source pixel x_start_px + C*dx/0x0800.
+   * Setting source(80) = 80 → x_start_px = 80 * (1 - dx/0x0800).
+   * Convert to 13.3 (pixel*8): x_start_fp = 8 * x_start_px
+   *                          = 8 * 80 * (0x0800 - dx) / 0x0800
+   *                          = (640 * (0x0800 - dx)) >> 11. */
+  int32_t x_start = (640 * (0x0800 - (int32_t) dx)) >> 11;
+  int32_t y_start = (640 * (0x0800 - (int32_t) dx)) >> 11;   /* same for y */
+  int16_t dy_per_line = dx;       /* uniform → y advances per output line at same rate as x per column */
+  for (uint16_t L = 0; L < ASIC_IMG_H; ++L) {
+    trace[L].x  = (int16_t) x_start;
+    trace[L].y  = (int16_t) (y_start + ((int32_t) L * dy_per_line >> 8));   /* 5.11 → 13.3: >> 8 since dx is 5.11 and L is integer */
+    trace[L].dx = dx;
+    trace[L].dy = 0;
+  }
+  asic_kick(0);    /* scale: no repeat → blank outside source = clean zoom */
   grant_2m_sub();
 }
 
@@ -573,7 +611,7 @@ static void render_warp(void)
     trace[L].dx = dx;
     trace[L].dy = 0;
   }
-  asic_kick();
+  asic_kick(1);    /* warp: per-line dx can step past source — repeat */
   grant_2m_sub();
 }
 
@@ -746,6 +784,11 @@ __attribute__((section(".init"))) void main()
         int16_t tilt_x = (int16_t) *ga_reg_comcmd1;
         int16_t tilt_y = (int16_t) *ga_reg_comcmd2;
         render_tilt(tilt_x, tilt_y);
+        break;
+      }
+      case CMD_RENDER_SCALE: {
+        int16_t dx = (int16_t) *ga_reg_comcmd1;
+        render_scale(dx);
         break;
       }
 

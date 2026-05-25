@@ -8,5 +8,6 @@
 #define CMD_PLAY_SFX   4   /* COMCMD1 low byte = SFX index (0=FIRE, 1=HIT, 2=DEATH) */
 #define CMD_RENDER_WARP 5  /* Run the ASIC stamp/map engine, perspective dx-per-line */
 #define CMD_RENDER_TILT 6  /* ASIC with x/y shear; COMCMD1=tilt_x, COMCMD2=tilt_y (signed pixels, at top of IMG) */
+#define CMD_RENDER_SCALE 7 /* ASIC uniform scale; COMCMD1 = dx (5.11 fixed; 0x0800 = identity, > = zoom-out) */
 
 #endif

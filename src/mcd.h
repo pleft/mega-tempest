@@ -26,6 +26,12 @@ void mcd_render_asic(u16 plane_vram_addr, u16 tile_base, u8 plane_x, u8 plane_y,
  * LEFT. (0, 0) = identity. Same DMA + paint as mcd_render_asic. */
 void mcd_render_asic_tilt(u16 plane_vram_addr, u16 tile_base,
                           u8 plane_x, u8 plane_y, s16 tilt_x, s16 tilt_y);
+
+/* Uniform-scale zoom — `dx` in 5.11 fixed (0x0800 = identity scale,
+ * larger = zoom out / web shrinks toward source centre). Caller must
+ * have loaded stamps + painted plane B for the ASIC IMG layout. */
+void mcd_render_asic_scale(u16 plane_vram_addr, u16 tile_base,
+                           u8 plane_x, u8 plane_y, s16 dx);
 /* Copy the demo Sega-character stamps + stamp map to WR. */
 void mcd_asic_load_stamps(void);
 

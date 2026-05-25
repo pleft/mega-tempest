@@ -263,7 +263,15 @@ static const WaveDef WAVES[16] = {
 static u16 g_wave_num;          // 0-indexed wave (wraps mod 16 for shape)
 static u8  g_pool[5];           // remaining-to-spawn: [flipper, tanker, pulsar, fuseball, spiker]
 static u8  g_wave_clear_timer;  // counts up while wave-clear conditions hold
-#define WAVE_CLEAR_DELAY 60     // 1 sec of empty-web pause before LOADING fires
+#define WAVE_CLEAR_DELAY 60     // 1 sec of empty-web pause before zoom fires
+
+/* Fly-down-tube transition: after the wave-clear hold, scroll plane B
+ * vertically each frame so the web slides off-screen. After ZOOM_OUT_FRAMES
+ * the bake runs (next_wave). Plane B is the web only — plane A (stars,
+ * HUD) and sprites are unaffected, so the player can still see the claw
+ * at its rim position while the web vanishes underneath. */
+static u8  g_zoom_out_frame;    // 0 = idle; 1..ZOOM_OUT_FRAMES while zooming
+#define ZOOM_OUT_FRAMES 28      // 28 frames * 8 px = 224 px = off-screen
 
 /* Superzapper: 1 charge per wave, B button triggers. Kills every live
  * enemy entity on screen at once. Spikes are NOT cleared (they're
@@ -526,6 +534,7 @@ static void next_wave(void)
 
   load_wave_pool(g_wave_num);
   g_wave_clear_timer = 0;
+  g_zoom_out_frame   = 0;   /* web_clear_plane_b already reset VSRAM */
   g_scene_dirty = 1;       /* repaint HUD next frame */
 }
 
@@ -959,18 +968,45 @@ static void play_gated_vblank(void)
     }
   }
 
-  /* Wave-clear: pool exhausted + no live enemies. Hold for
-   * WAVE_CLEAR_DELAY frames (~1 s) of empty-web pause before kicking
-   * the LOADING transition — feels less abrupt than firing instantly.
-   * Resets if any of the conditions stop holding. */
-  if (g_respawn_timer == 0 && pool_total() == 0 && g_enemy_count == 0) {
+  /* Wave-clear → 1 s pause → zoom-out → bake → next wave. */
+  if (g_respawn_timer == 0 && pool_total() == 0 && g_enemy_count == 0 &&
+      g_zoom_out_frame == 0) {
     g_wave_clear_timer++;
     if (g_wave_clear_timer >= WAVE_CLEAR_DELAY) {
+      g_wave_clear_timer = 0;
+      g_zoom_out_frame   = 1;            /* begin fly-down-tube */
+    }
+  } else if (g_zoom_out_frame == 0) {
+    g_wave_clear_timer = 0;
+  }
+
+  /* Zoom-out via ASIC. Frame 1 sets up (bakes current web into stamps);
+   * every frame thereafter sends a render-scale command with a growing
+   * dx so the web visibly shrinks toward source centre. After
+   * ZOOM_OUT_FRAMES, hand off to next_wave for the bake. */
+  if (g_zoom_out_frame > 0 && g_mcd_present) {
+    if (g_zoom_out_frame == 1) {
+      /* One-time setup: bake current web shape into ASIC stamps + map.
+       * Also wipe the sprite attribute table so the claw + enemies
+       * vanish for the duration of the transition — only the web
+       * should be visible while it zooms. */
+      mcd_asic_load_web_stamps(4);
+      vdp_ctrl_32 = to_vdp_addr(0xb800) | VRAM_W;
+      vdp_data = 0; vdp_data = 0; vdp_data = 0; vdp_data = 0;
+    }
+    /* dx ramps from 0x0800 (identity) up by 0x200 per frame so the web
+     * shrinks toward centre over the transition. */
+    s16 dx = (s16) (0x0800 + (g_zoom_out_frame - 1) * 0x200);
+    mcd_render_asic_scale(0x4000, 0x280, 10, 4, dx);
+    g_zoom_out_frame++;
+    if (g_zoom_out_frame > ZOOM_OUT_FRAMES) {
       next_wave();
       return;
     }
-  } else {
-    g_wave_clear_timer = 0;
+  } else if (g_zoom_out_frame > 0) {
+    /* No Mega CD: just skip the zoom and bake the next wave. */
+    next_wave();
+    return;
   }
 
   /* Respawn timer countdown — on hitting zero, either bring the player
@@ -1046,8 +1082,11 @@ static void play_main_thread(void)
 
   /* Pick pre-baked variant matching player's target lane (after slide).
    * Set g_vp to that variant's camera, project rim mids so sprites match,
-   * DMA variant tile data to plane B. ~7ms DMA fits comfortably in 60Hz. */
-  if (g_mcd_present) {
+   * DMA variant tile data to plane B. ~7ms DMA fits comfortably in 60Hz.
+   * Skipped during the ASIC zoom-out — that pipeline owns plane B's
+   * tile content (col-major) and we'd otherwise overwrite it with the
+   * variant's row-major data, producing a 90° transposed leftover. */
+  if (g_mcd_present && g_zoom_out_frame == 0) {
     /* DIAG isolated the bug to per-lane variant data (variant 0 is
      * clean; one specific variant K has bad pixels). Re-enabled so we
      * can identify K via the LANE readout below — navigate to the
@@ -1069,9 +1108,16 @@ static void play_main_thread(void)
     g_vp_y = 0;
   }
 
-  render_sprites();
+  /* Skip sprites during the ASIC zoom — sprite table was cleared at
+   * zoom start; re-rendering would re-show the (frozen) claw. */
+  if (g_zoom_out_frame == 0) render_sprites();
 
-  if (p1_single & PAD_C) install_title();    /* debug shortcut moved B→C */
+  /* C button — debug: force the wave transition right now (zoom + bake
+   * next wave). Useful for iterating on the ASIC zoom effect without
+   * having to clear a wave normally. */
+  if ((p1_single & PAD_C) && g_zoom_out_frame == 0 && g_respawn_timer == 0) {
+    g_zoom_out_frame = 1;
+  }
 }
 
 // ---- Scene: GAME OVER -----------------------------------------------------

@@ -444,11 +444,13 @@ static void asic_render_kick_and_paint(u16 cmd, u16 plane_vram_addr,
   vdp_ctrl_32 = to_vdp_addr(tile_base * 32) | VRAM_W;
   vdp_data_32 = *((volatile u32 const *) WR_IMG_BUF);
 
-  /* Paint plane COL-MAJOR for 20x20 cells: tile = col*20 + row. */
+  /* Paint plane COL-MAJOR for 20x20 cells: tile = col*20 + row.
+   * Priority=1 so the web stays in front of the plane-A starfield
+   * (matches the variant pipeline's web_paint_plane_b). */
   for (u8 row = 0; row < 20; ++row) {
     vdp_ctrl_32 = to_vdp_addr(plane_vram_addr + ((plane_y + row) * 64 + plane_x) * 2) | VRAM_W;
     for (u8 col = 0; col < 20; ++col) {
-      vdp_data = (u16) (tile_base + col * 20 + row);
+      vdp_data = (u16) (0x8000 | (tile_base + col * 20 + row));
     }
   }
 }
@@ -465,6 +467,17 @@ void mcd_render_asic_tilt(u16 plane_vram_addr, u16 tile_base,
   *GA_REG_COMCMD1_W = (u16) tilt_x;
   *GA_REG_COMCMD2_W = (u16) tilt_y;
   asic_render_kick_and_paint(CMD_RENDER_TILT, plane_vram_addr, tile_base, plane_x, plane_y);
+}
+
+/* Uniform-scale zoom via sub-side render_scale. dx = 0x0800 is identity;
+ * dx > 0x0800 zooms out (web shrinks toward centre); dx < 0x0800 zooms
+ * in. Caller has already loaded the stamps + painted plane B in
+ * col-major layout. */
+void mcd_render_asic_scale(u16 plane_vram_addr, u16 tile_base,
+                           u8 plane_x, u8 plane_y, s16 dx)
+{
+  *GA_REG_COMCMD1_W = (u16) dx;
+  asic_render_kick_and_paint(CMD_RENDER_SCALE, plane_vram_addr, tile_base, plane_x, plane_y);
 }
 
 void mcd_wait_ack(u16 expected)
