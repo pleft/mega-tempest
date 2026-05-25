@@ -264,6 +264,19 @@ static u16 g_wave_num;          // 0-indexed wave (wraps mod 16 for shape)
 static u8  g_pool[5];           // remaining-to-spawn: [flipper, tanker, pulsar, fuseball, spiker]
 static u8  g_wave_clear_timer;  // counts up while wave-clear conditions hold
 #define WAVE_CLEAR_DELAY 60     // 1 sec of empty-web pause before LOADING fires
+
+/* Superzapper: 1 charge per wave, B button triggers. Kills every live
+ * enemy entity on screen at once. Spikes are NOT cleared (they're
+ * terrain, not enemies). */
+static u8 g_superzapper_charges;
+#define SUPERZAPPER_PER_WAVE 1
+
+/* Screen flash + per-kill spark — visual feedback for the zap. cram[0]
+ * (background) goes white for ZAP_FLASH_FRAMES, and each killed enemy
+ * leaves a stationary E_ZAPSPARK at its last position for ZAP_SPARK_LIFE. */
+static u8 g_zap_flash;
+#define ZAP_FLASH_FRAMES   4
+#define ZAP_SPARK_LIFE     8
 #define POOL_FLIPPER  0
 #define POOL_TANKER   1
 #define POOL_PULSAR   2
@@ -407,6 +420,41 @@ static void spawn_spiker(u8 lane)
   g_enemy_count++;
 }
 
+static void kill_enemy(Entity * e);    /* forward decl — defined below */
+
+/* Fire the superzapper: kill every live enemy entity AND spawn a zapspark
+ * marker at each kill site. Spikes (g_spike_depth) are terrain — left
+ * alone. Also flashes the screen for a few frames. */
+static void trigger_superzapper(void)
+{
+  g_superzapper_charges--;
+  Entity * e = g_active_head;
+  while (e) {
+    Entity * next = e->next;
+    if (e->type == E_FLIPPER || e->type == E_TANKER ||
+        e->type == E_PULSAR  || e->type == E_FUSEBALL ||
+        e->type == E_SPIKER) {
+      /* Spawn a zapspark at this enemy's lane+depth before killing. */
+      Entity * s = entity_spawn();
+      if (s) {
+        s->type         = E_ZAPSPARK;
+        s->lane         = e->lane;
+        s->depth_fp     = e->depth_fp;
+        s->depth_vel_fp = 0;
+        s->phase        = 0;
+        s->step_period  = 0;
+        s->lifetime     = ZAP_SPARK_LIFE;
+      }
+      kill_enemy(e);
+    }
+    e = next;
+  }
+  g_zap_flash = ZAP_FLASH_FRAMES;
+  /* HIT sample = "enemy killed" — closest match to the zap killing many. */
+  if (g_mcd_present) mcd_play_sfx(1);
+  else               sfx_hit();
+}
+
 /* Total enemies remaining in the spawn pool. */
 static u16 pool_total(void)
 {
@@ -424,6 +472,7 @@ static void load_wave_pool(u16 wave_idx)
   g_pool[POOL_FUSEBALL] = WAVES[t].num_fuseballs;
   g_pool[POOL_SPIKER]   = WAVES[t].num_spikers;
   g_spawn_timer = WAVES[t].spawn_period;
+  g_superzapper_charges = SUPERZAPPER_PER_WAVE;
 }
 
 /* Advance to the next wave: clear active enemies + spikes, swap web shape,
@@ -618,6 +667,14 @@ static void play_gated_vblank(void)
   g_anim_frame++;     /* drives flipper rotation (4 frames, 8 ticks each) */
   update_starfield(); /* drifts star dots through the cell once per ~2 s */
 
+  /* Superzapper screen flash — cram[0] (background) swaps to white for
+   * ZAP_FLASH_FRAMES, restores to black when the counter hits zero. */
+  if (g_zap_flash) {
+    g_zap_flash--;
+    vdp_ctrl_32 = to_vdp_addr(0) | CRAM_W;
+    vdp_data    = g_zap_flash ? 0x0EEE : 0x0000;
+  }
+
   /* Tick spike hit-flash counters. */
   for (u8 k = 0; k < MAX_LANES; ++k)
     if (g_spike_flash[k]) g_spike_flash[k]--;
@@ -666,6 +723,11 @@ static void play_gated_vblank(void)
     if ((p1_single & PAD_A) && g_fire_cooldown == 0) {
       spawn_shot(g_player_lane);
       g_fire_cooldown = FIRE_COOLDOWN;
+    }
+    /* Superzapper on B — instant kill of every live enemy. 1 charge per
+     * wave. Spikes are terrain, not enemies; they survive. */
+    if ((p1_single & PAD_B) && g_superzapper_charges > 0) {
+      trigger_superzapper();
     }
   }
 
@@ -785,6 +847,10 @@ static void play_gated_vblank(void)
       /* Accumulate per-axis offset by direction's DX/DY each frame. */
       e->depth_fp     += DEBRIS_DX[e->lane];
       e->depth_vel_fp += DEBRIS_DY[e->lane];
+      if (e->lifetime) e->lifetime--;
+      if (e->lifetime == 0) entity_kill(e);
+    } else if (e->type == E_ZAPSPARK) {
+      /* Stationary; just count down to despawn. */
       if (e->lifetime) e->lifetime--;
       if (e->lifetime == 0) entity_kill(e);
     }
@@ -954,6 +1020,7 @@ static void play_main_thread(void)
     clear_play_area();
     print("SCORE:", plane_xy(28, 27));
     print("LIVES:", plane_xy( 2, 27));
+    print("SZ:",    plane_xy(10, 27));
     print("WAVE:",  plane_xy(15, 27));
     g_scene_dirty = 0;
   }
@@ -967,6 +1034,9 @@ static void play_main_thread(void)
 
   // Lives readout — single digit (capped to 9 for safety).
   plane_putc(9, 27, (char) ('0' + (g_lives > 9 ? 9 : g_lives)));
+
+  // Superzapper charge — single digit.
+  plane_putc(13, 27, (char) ('0' + g_superzapper_charges));
 
   // Wave readout — 2 digits, 1-based display.
   u16 w = (u16) (g_wave_num + 1);
@@ -1001,7 +1071,7 @@ static void play_main_thread(void)
 
   render_sprites();
 
-  if (p1_single & PAD_B) install_title();
+  if (p1_single & PAD_C) install_title();    /* debug shortcut moved B→C */
 }
 
 // ---- Scene: GAME OVER -----------------------------------------------------

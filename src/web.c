@@ -948,7 +948,16 @@ void render_sprites(void)
     emit_sprite_depth(spr_buf, n++, &SHOT_SIZE, px, py, g_spike_depth[k]);
   }
 
-  /* Pass 9: DEBRIS — death-burst particles. Origin is the snapshotted
+  /* Pass 9: ZAPSPARKS — superzapper kill markers. Stationary white dots
+   * at each killed enemy's lane+depth, lifetime ZAP_SPARK_LIFE frames. */
+  for (Entity * e = g_active_head; e; e = e->next) {
+    if (e->type != E_ZAPSPARK || n >= SPR_MAX) continue;
+    s16 px = web_pixel_x(e->lane, e->depth_fp);
+    s16 py = web_pixel_y(e->lane, e->depth_fp);
+    emit_sprite_depth(spr_buf, n++, &SHOT_SIZE, px, py, e->depth_fp);
+  }
+
+  /* Pass 10: DEBRIS — death-burst particles. Origin is the snapshotted
    * claw position (g_death_x/y, written by main.c on death). Each particle
    * stores accumulated x-offset in depth_fp and y-offset in depth_vel_fp;
    * we just add to the origin and render as a 1x1 shot tile. */

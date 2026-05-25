@@ -39,6 +39,9 @@ typedef enum {
                     // as it descends. The spike lives in g_spike_depth[]
                     // (not an entity); spiker despawns on reaching rim.
                     // Uses lane/depth_fp/depth_vel_fp same as flipper.
+  E_ZAPSPARK = 9,   // superzapper kill marker — stationary at a lane+depth
+                    // for a few frames, then vanishes. Reuses lane/depth_fp
+                    // for screen position, lifetime for countdown.
 } EntityType;
 
 struct Entity {
