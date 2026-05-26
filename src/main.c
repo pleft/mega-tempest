@@ -203,10 +203,18 @@ static void install_title(void)
   g_engine.paused        = 0;
   g_scene_dirty          = 1;
 
-  if (g_mcd_present && g_music_playing) {
-    mcd_stop_mod();
-    mcd_wait_ack(CMD_STOP_MOD);
-    g_music_playing = 0;
+  if (g_mcd_present) {
+    /* Stop whatever's playing, then upload + start the title theme
+     * (tune13.mod — matches the Jaguar's "theme tune" at yak.s:1018). */
+    if (g_music_playing) {
+      mcd_stop_mod();
+      mcd_wait_ack(CMD_STOP_MOD);
+      g_music_playing = 0;
+    }
+    mcd_upload_mod(&res_tune13_mod);
+    mcd_play_mod(res_tune13_mod.size);
+    mcd_wait_ack(CMD_PLAY_MOD);
+    g_music_playing = 1;
   }
   web_clear_plane_b();
 }
@@ -618,15 +626,9 @@ static void install_playfield(void)
   g_respawn_timer = 0;
   for (u8 k = 0; k < MAX_LANES; ++k) { g_spike_depth[k] = 0; g_spike_flash[k] = 0; }
 
-  /* Stop any leftover music NOW so the LOADING screen is silent.
-   * The new MOD is uploaded + started AFTER all rendering finishes
-   * (further down) so music starts at the same moment the player sees
-   * the game ready. */
-  if (g_mcd_present && g_music_playing) {
-    mcd_stop_mod();
-    mcd_wait_ack(CMD_STOP_MOD);
-    g_music_playing = 0;
-  }
+  /* (Music continues to play through the LOADING bake — we only stop
+   * the title theme right before swapping in rave4 at the end of this
+   * function.) */
 
   if (g_mcd_present) {
     /* Clear plane B fully first (any stale tilemap entries from a
@@ -661,9 +663,12 @@ static void install_playfield(void)
   vdp_ctrl_32 = to_vdp_addr(1 * 2) | CRAM_W;
   vdp_data    = 0x0EEE;
 
-  /* Level is fully rendered — kick off music now (Mega CD only;
-   * gracefully silent on plain MD). */
+  /* Level is fully rendered — swap the title theme for rave4. */
   if (g_mcd_present) {
+    if (g_music_playing) {
+      mcd_stop_mod();
+      mcd_wait_ack(CMD_STOP_MOD);
+    }
     mcd_upload_mod(&res_rave4_mod);
     mcd_play_mod(res_rave4_mod.size);
     mcd_wait_ack(CMD_PLAY_MOD);

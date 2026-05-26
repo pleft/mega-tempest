@@ -14,6 +14,7 @@ extern u16 const res_megadev_pal[16];
 
 extern DataChunk const res_spx;
 extern DataChunk const res_rave4_mod;
+extern DataChunk const res_tune13_mod;
 
 /* MC-T16 ASIC test resources. */
 extern DataChunk const res_stamp01;

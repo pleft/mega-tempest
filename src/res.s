@@ -13,7 +13,11 @@ FILE "spx.smd", res_spx
 
 // In-game music. For MC-T2 we just ship one track and play it on
 // PLAYFIELD entry; later we can sequence per-level music.
-FILE "rave4.mod", res_rave4_mod
+FILE "rave4.mod",  res_rave4_mod
+
+// Title-screen theme — matches the Jaguar T2K "theme tune"
+// (modtable[0] = tune13.mod per tempest2k-source/src/yak.s:1018).
+FILE "tune13.mod", res_tune13_mod
 
 // ASIC test stamps (32x32, 16 colors) — backported from /asic-test/
 // for MC-T16 revival. Sega character closeups from megadev transforms.
