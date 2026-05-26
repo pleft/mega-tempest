@@ -81,7 +81,7 @@ SPIKER_FRAMES = [
 ]
 
 SPRITES = FLIPPER_FRAMES + TANKER_FRAMES + PULSAR_FRAMES + FUSEBALL_FRAMES + SPIKER_FRAMES + [
-    ("shot",      "pshot",     "pshotverts", 0.0, 1, PAL_WHITE, 1.0),
+    ("shot",      "pshot",     "pshotverts", 0.0, 1, PAL_WHITE, 0.5),
 ] + [
     # 16 lane-specific claw rotations. `-lane * π/8` in y-down screen coords
     # rotates the claw visually CW as the player walks CW around the rim,
