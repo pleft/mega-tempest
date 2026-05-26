@@ -1066,6 +1066,17 @@ static void play_main_thread(void)
     g_scene_dirty = 0;
   }
 
+  /* START toggles pause. g_engine.paused gates gated_vblank in the main
+   * loop, so toggling it freezes input + entity ticks + spawn timers,
+   * but main_thread still runs (we want to keep reading START for the
+   * unpause edge). Music continues — it's on the Sub CPU and stopping
+   * the MOD would lose its position. */
+  if (p1_single & PAD_START) {
+    g_engine.paused = !g_engine.paused;
+    if (g_engine.paused) print("PAUSE", plane_xy(17, 14));
+    else                 print("     ", plane_xy(17, 14));   /* wipe overlay */
+  }
+
   // Score readout — 4 digits, no 32-bit divide needed.
   u16 s = g_score;
   plane_putc(37, 27, (char) ('0' + (s % 10))); s /= 10;
