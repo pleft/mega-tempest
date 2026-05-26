@@ -117,13 +117,13 @@ On real hardware: flash to a flashcart that supports Mode 1, attach to a Mega CD
 
 ## Controls
 
-| Button | Title | Playfield |
-|--------|-------|-----------|
-| **D-pad ◀ ▶** | — | walk lanes |
-| **A** | — | fire |
-| **B** | — | superzapper (1 charge per wave) |
-| **C** | cycle preview shape | (debug) force wave transition |
-| **START** | begin play | — |
+| Button | Title | Playfield | Game over |
+|--------|-------|-----------|-----------|
+| **D-pad ◀ ▶** | — | walk lanes | — |
+| **A** | — | fire | — |
+| **B** | — | superzapper (1 charge per wave) | — |
+| **C** | cycle preview shape | (debug) force wave transition | — |
+| **START** | begin play | **pause / resume** | back to title |
 
 ---
 
