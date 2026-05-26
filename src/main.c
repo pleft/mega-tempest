@@ -1186,17 +1186,24 @@ void main(void)
   cram[1]  = 0x0EEE;          // 1 white   — text, UI, player
   cram[2]  = 0x000E;          // 2 red     — flipper sprites
   cram[3]  = 0x0E0E;          // 3 magenta — tanker ("Pink Thang" per obj2d.s)
-  cram[4]  = 0x00EE;          // 4 yellow  — web outline lines
+  cram[4]  = 0x0E80;          // 4 electric blue — web outline (matches Jag T2K)
   /* slot 9 set below (after blue-gradient block to keep slots grouped) */
   /* Web lane fill gradient: 4 bands from deep (inner, far) to bright
    * (outer rim, near). All in the blue/purple family for that T2K vibe. */
-  cram[5]  = 0x0200;          // 5 darkest navy — innermost band
-  cram[6]  = 0x0412;          // 6 dark blue
-  cram[7]  = 0x0624;          // 7 medium blue
-  cram[8]  = 0x0846;          // 8 brightest blue-purple — outermost band
+  /* 8-step blue gradient — every valid xBGR intensity from 0x2 to 0xE.
+   * Inner web fill bands use 5,6,7,8; outer bands use 12,13,14,15.
+   * (See WEB_FILL_BANDS in web.c.) */
+  cram[5]  = 0x0200;
+  cram[6]  = 0x0400;
+  cram[7]  = 0x0600;
+  cram[8]  = 0x0800;
   cram[9]  = 0x0EE0;          // 9 cyan    — pulsar sprite
   cram[10] = 0x00E0;          // 10 green  — fuseball sprite
-  cram[15] = 0x0AAA;          // 15 gray   — dim accent
+  cram[11] = 0x00EE;          // 11 yellow — player claw (moved off slot 4)
+  cram[12] = 0x0A00;          // 12 web fill band 4
+  cram[13] = 0x0C00;          // 13 web fill band 5
+  cram[14] = 0x0E00;          // 14 web fill band 6 — bright blue
+  cram[15] = 0x0E00;          // 15 web fill band 7 — pure blue, outline (0x0E80) pops above it
   update_cram();
 
   init_joypads();

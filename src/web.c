@@ -540,11 +540,15 @@ static void web_fill_quad_c(WebCfg const * c,
 /* Lane fill = 4-band gradient from deep (near vanishing point, inner) to
  * bright (near rim, outer). Palette indices 5..8 are set up in main.c
  * to step from dark navy → medium → brighter → brightest blue/purple. */
-#define WEB_FILL_BANDS  4
-#define WEB_FILL_PAL_0  5      /* darkest, at depth 0..1/4   (innermost) */
+#define WEB_FILL_BANDS  8      /* one per blue intensity step 0x2..0xE */
+#define WEB_FILL_PAL_0  5      /* darkest, innermost band */
 #define WEB_FILL_PAL_1  6
 #define WEB_FILL_PAL_2  7
-#define WEB_FILL_PAL_3  8      /* brightest, at depth 3/4..1 (outer rim) */
+#define WEB_FILL_PAL_3  8
+#define WEB_FILL_PAL_4  12
+#define WEB_FILL_PAL_5  13
+#define WEB_FILL_PAL_6  14
+#define WEB_FILL_PAL_7  15     /* brightest, outermost band */
 
 /* Parametric core. Renders the current web shape into cfg->buf at the
  * cfg's specified scale + dimensions. Used by both web_render_main
@@ -581,6 +585,7 @@ static void web_render_to(WebCfg const * cfg, u8 pal)
   if (!cfg->skip_fills) {
     static const u8 BAND_PAL[WEB_FILL_BANDS] = {
       WEB_FILL_PAL_0, WEB_FILL_PAL_1, WEB_FILL_PAL_2, WEB_FILL_PAL_3,
+      WEB_FILL_PAL_4, WEB_FILL_PAL_5, WEB_FILL_PAL_6, WEB_FILL_PAL_7,
     };
     for (u8 k = 0; k < S; ++k) {
       u8 j = (u8) (k + 1);
@@ -590,8 +595,8 @@ static void web_render_to(WebCfg const * cfg, u8 pal)
       s16 dxj = (s16) (ox[j] - ix[j]);
       s16 dyj = (s16) (oy[j] - iy[j]);
       for (u8 b = 0; b < WEB_FILL_BANDS; ++b) {
-        s16 lo = (s16) (b << 2);
-        s16 hi = (s16) ((b + 1) << 2);
+        s16 lo = (s16) (b << 1);          /* 8 bands × 2 = 16 (full inner→outer span) */
+        s16 hi = (s16) ((b + 1) << 1);
         s16 x_k_lo = (s16) (ix[k] + ((dxk * lo) >> 4));
         s16 y_k_lo = (s16) (iy[k] + ((dyk * lo) >> 4));
         s16 x_k_hi = (s16) (ix[k] + ((dxk * hi) >> 4));

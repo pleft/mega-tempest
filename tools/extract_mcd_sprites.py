@@ -28,9 +28,11 @@ OUT_H = Path(__file__).resolve().parents[1] / "src/sprites.h"
 PAL_WHITE  = 1
 PAL_RED    = 2
 PAL_PINK   = 3
-PAL_YELLOW = 4
+# Slot 4 = web outline colour (electric blue per Jag T2K). Player claw
+# moved to slot 11 to keep it yellow without recolouring the web.
 PAL_CYAN   = 9     # set in main.c cram[9] = 0x0EE0 — pulsar
 PAL_GREEN  = 10    # set in main.c cram[10] = 0x00E0 — fuseball
+PAL_YELLOW = 11    # set in main.c cram[11] = 0x00EE — player claw
 
 # Flipper tile pack: 3 size tiers × 4 rotation frames (0°, 90°, 180°, 270°).
 # All output as 1x1 sprites; tier 0 = small dot (far), tier 2 = full 8x8 (near).

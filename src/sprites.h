@@ -41,21 +41,21 @@ extern const u8 SPR_SPIKER_T0[32];  /* 1x1, pal 1 */
 extern const u8 SPR_SPIKER_T1[32];  /* 1x1, pal 1 */
 extern const u8 SPR_SPIKER_T2[32];  /* 1x1, pal 1 */
 extern const u8 SPR_SHOT[32];  /* 1x1, pal 1 */
-extern const u8 SPR_PLAYER_L00[128];  /* 2x2, pal 4 */
-extern const u8 SPR_PLAYER_L01[128];  /* 2x2, pal 4 */
-extern const u8 SPR_PLAYER_L02[128];  /* 2x2, pal 4 */
-extern const u8 SPR_PLAYER_L03[128];  /* 2x2, pal 4 */
-extern const u8 SPR_PLAYER_L04[128];  /* 2x2, pal 4 */
-extern const u8 SPR_PLAYER_L05[128];  /* 2x2, pal 4 */
-extern const u8 SPR_PLAYER_L06[128];  /* 2x2, pal 4 */
-extern const u8 SPR_PLAYER_L07[128];  /* 2x2, pal 4 */
-extern const u8 SPR_PLAYER_L08[128];  /* 2x2, pal 4 */
-extern const u8 SPR_PLAYER_L09[128];  /* 2x2, pal 4 */
-extern const u8 SPR_PLAYER_L10[128];  /* 2x2, pal 4 */
-extern const u8 SPR_PLAYER_L11[128];  /* 2x2, pal 4 */
-extern const u8 SPR_PLAYER_L12[128];  /* 2x2, pal 4 */
-extern const u8 SPR_PLAYER_L13[128];  /* 2x2, pal 4 */
-extern const u8 SPR_PLAYER_L14[128];  /* 2x2, pal 4 */
-extern const u8 SPR_PLAYER_L15[128];  /* 2x2, pal 4 */
+extern const u8 SPR_PLAYER_L00[128];  /* 2x2, pal 11 */
+extern const u8 SPR_PLAYER_L01[128];  /* 2x2, pal 11 */
+extern const u8 SPR_PLAYER_L02[128];  /* 2x2, pal 11 */
+extern const u8 SPR_PLAYER_L03[128];  /* 2x2, pal 11 */
+extern const u8 SPR_PLAYER_L04[128];  /* 2x2, pal 11 */
+extern const u8 SPR_PLAYER_L05[128];  /* 2x2, pal 11 */
+extern const u8 SPR_PLAYER_L06[128];  /* 2x2, pal 11 */
+extern const u8 SPR_PLAYER_L07[128];  /* 2x2, pal 11 */
+extern const u8 SPR_PLAYER_L08[128];  /* 2x2, pal 11 */
+extern const u8 SPR_PLAYER_L09[128];  /* 2x2, pal 11 */
+extern const u8 SPR_PLAYER_L10[128];  /* 2x2, pal 11 */
+extern const u8 SPR_PLAYER_L11[128];  /* 2x2, pal 11 */
+extern const u8 SPR_PLAYER_L12[128];  /* 2x2, pal 11 */
+extern const u8 SPR_PLAYER_L13[128];  /* 2x2, pal 11 */
+extern const u8 SPR_PLAYER_L14[128];  /* 2x2, pal 11 */
+extern const u8 SPR_PLAYER_L15[128];  /* 2x2, pal 11 */
 
 #endif
