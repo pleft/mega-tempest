@@ -1061,8 +1061,8 @@ static void play_main_thread(void)
     clear_play_area();
     print("SCORE:", plane_xy(28, 27));
     print("LIVES:", plane_xy( 2, 27));
-    print("SZ:",    plane_xy(10, 27));
-    print("WAVE:",  plane_xy(15, 27));
+    print("SZ:",    plane_xy(11, 27));     /* +1 col: spacer after LIVES digit */
+    print("WAVE:",  plane_xy(16, 27));     /* +1 col: spacer after SZ digit    */
     g_scene_dirty = 0;
   }
 
@@ -1088,12 +1088,12 @@ static void play_main_thread(void)
   plane_putc(9, 27, (char) ('0' + (g_lives > 9 ? 9 : g_lives)));
 
   // Superzapper charge — single digit.
-  plane_putc(13, 27, (char) ('0' + g_superzapper_charges));
+  plane_putc(14, 27, (char) ('0' + g_superzapper_charges));
 
   // Wave readout — 2 digits, 1-based display.
   u16 w = (u16) (g_wave_num + 1);
-  plane_putc(22, 27, (char) ('0' + (w % 10))); w /= 10;
-  plane_putc(21, 27, (char) ('0' + (w % 10)));
+  plane_putc(23, 27, (char) ('0' + (w % 10))); w /= 10;
+  plane_putc(22, 27, (char) ('0' + (w % 10)));
 
 
   /* Pick pre-baked variant matching player's target lane (after slide).

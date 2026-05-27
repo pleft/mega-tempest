@@ -131,7 +131,7 @@ On real hardware: flash to a flashcart that supports Mode 1, attach to a Mega CD
 
 - **Original game**: Tempest 2000 — Llamasoft / Atari, Jaguar (1994), by Jeff Minter and team.
 - **Reverse-engineered Jag source**: [mwenge/tempest2k](https://github.com/mwenge/tempest2k) — invaluable reference for enemy AI, wave structure, polygon data, and palette decisions.
-- **Mega CD development framework**: [megadev](https://github.com/krikzz/megadev) — provided the Mode 1 boot setup, Sub CPU build pipeline, and VDP helpers.
+- **Mega CD development framework**: [megadev](https://github.com/drojaazu/megadev) — provided the Mode 1 boot setup, Sub CPU build pipeline, and VDP helpers.
 - **MOD player on RF5C164**: based on the Chilly Willy lineage via [matteusbeus/ModPlayer](https://github.com/matteusbeus/ModPlayer).
 
 ---
