@@ -20,6 +20,11 @@ OBJ2D = ROOT / "tempest2k-source/src/obj2d.s"
 OUT_C = Path(__file__).resolve().parents[1] / "src/sprites.c"
 OUT_H = Path(__file__).resolve().parents[1] / "src/sprites.h"
 
+if not OBJ2D.is_file():
+    sys.exit(f"error: {OBJ2D} not found.\n"
+             "  Expected tempest2k-source/ next to megacd-port/.\n"
+             "  Clone it: git clone https://github.com/mwenge/tempest2k")
+
 # (c_name, sprite_label, verts_label_or_None, rotation_rad, size_tiles_per_side, palette_idx, scale)
 # palette_idx maps to megacd-port main.c cram[]: 1=white, 2=red, 4=yellow.
 # scale shrinks the polygon around its centroid before rasterising, so the

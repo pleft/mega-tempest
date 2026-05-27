@@ -23,12 +23,19 @@ state a rate but the source plays them at the same period $01ac/$00d6
 in the Jaguar DSP — close enough to treat as 8363 for now.
 """
 
-import struct
+import struct, sys
 from pathlib import Path
 
-JAG_SRC = Path("/Users/pleft/Dev/Tempest2K/tempest2k-source/src/sounds/samples")
+# tempest2k-source/ is expected as a sibling of megacd-port/.
+ROOT    = Path(__file__).resolve().parents[2]
+JAG_SRC = ROOT / "tempest2k-source/src/sounds/samples"
 OUT_C   = Path(__file__).resolve().parents[1] / "sub/src/sfx_data.c"
 OUT_H   = Path(__file__).resolve().parents[1] / "sub/src/sfx_data.h"
+
+if not JAG_SRC.is_dir():
+    sys.exit(f"error: {JAG_SRC} not found.\n"
+             "  Expected tempest2k-source/ next to megacd-port/.\n"
+             "  Clone it: git clone https://github.com/mwenge/tempest2k")
 
 SFX = [
     ("FIRE",  "06", True),      # IFF 8SVX wrapper
