@@ -138,4 +138,4 @@ On real hardware: flash to a flashcart that supports Mode 1, attach to a Mega CD
 
 ## License + redistribution
 
-Source code under this project is provided for educational and homebrew purposes. Tempest 2000 itself is © Atari / Llamasoft. The MOD music files (`rave4.mod`, `tune13.mod`) and polygon/sprite data are derived from the original game; redistribution beyond personal use should respect the rights of the original creators.
+Source code under this project is provided for educational and homebrew purposes. Tempest 2000 itself is © Atari / Llamasoft. The MOD music files (`rave4.mod`, `tune5.mod`, `tune7.mod`, `tune12.mod`, `tune13.mod`) and polygon/sprite data are derived from the original game; redistribution beyond personal use should respect the rights of the original creators.
