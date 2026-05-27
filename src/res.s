@@ -11,9 +11,13 @@ GLABEL res_megadev_pal
 // attached. Drives MOD playback on the RF5C164.
 FILE "spx.smd", res_spx
 
-// In-game music. For MC-T2 we just ship one track and play it on
-// PLAYFIELD entry; later we can sequence per-level music.
+// Gameplay music — cycled per wave (wave_num & 3) → rave4 / tune7 /
+// tune5 / tune12. Matches the Jaguar's webtunes[] set (yak.s:19152)
+// at a tighter cadence (every wave, not every 32 waves).
 FILE "rave4.mod",  res_rave4_mod
+FILE "tune7.mod",  res_tune7_mod
+FILE "tune5.mod",  res_tune5_mod
+FILE "tune12.mod", res_tune12_mod
 
 // Title-screen theme — matches the Jaguar T2K "theme tune"
 // (modtable[0] = tune13.mod per tempest2k-source/src/yak.s:1018).

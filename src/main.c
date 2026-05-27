@@ -181,6 +181,7 @@ static EngineState g_engine;
 
 static u8  g_mcd_present;
 static u8  g_music_playing;
+static u8  g_music_idx;          /* gameplay tune slot (0..3); 0xFF = none */
 static u8  g_scene_dirty;     // set by install_*; main loop redraws static text
 
 // Forward decls — the scenes call each other across file order.
@@ -215,6 +216,7 @@ static void install_title(void)
     mcd_play_mod(res_tune13_mod.size);
     mcd_wait_ack(CMD_PLAY_MOD);
     g_music_playing = 1;
+    g_music_idx     = 0xFF;       /* gameplay tune state invalidated */
   }
   web_clear_plane_b();
 }
@@ -280,6 +282,18 @@ static u8  g_wave_clear_timer;  // counts up while wave-clear conditions hold
  * at its rim position while the web vanishes underneath. */
 static u8  g_zoom_out_frame;    // 0 = idle; 1..ZOOM_OUT_FRAMES while zooming
 #define ZOOM_OUT_FRAMES 28      // 28 frames * 8 px = 224 px = off-screen
+
+/* Per-wave music cycle: every wave swaps in a new MOD from this 4-entry
+ * pool. Matches the Jaguar's webtunes[] set (yak.s:19152) — rave4 /
+ * tune7 / tune5 / tune12 — but cycles every wave instead of every 32
+ * so a typical play session hears the full set. g_music_idx is declared
+ * up by g_music_playing so install_title can reset it. */
+static const DataChunk * const WAVE_MUSIC[4] = {
+  &res_rave4_mod,
+  &res_tune7_mod,
+  &res_tune5_mod,
+  &res_tune12_mod,
+};
 
 /* Superzapper: 1 charge per wave, B button triggers. Kills every live
  * enemy entity on screen at once. Spikes are NOT cleared (they're
@@ -491,6 +505,25 @@ static void load_wave_pool(u16 wave_idx)
   g_superzapper_charges = SUPERZAPPER_PER_WAVE;
 }
 
+/* Swap to the gameplay MOD for the given wave (wave_num & 3 → WAVE_MUSIC).
+ * No-op if the requested tune is already loaded — keeps the MOD position
+ * intact when waves share a tune. */
+static void switch_wave_music(u16 wave_num)
+{
+  if (!g_mcd_present) return;
+  u8 idx = (u8) (wave_num & 0x3);
+  if (idx == g_music_idx && g_music_playing) return;
+  if (g_music_playing) {
+    mcd_stop_mod();
+    mcd_wait_ack(CMD_STOP_MOD);
+  }
+  mcd_upload_mod(WAVE_MUSIC[idx]);
+  mcd_play_mod(WAVE_MUSIC[idx]->size);
+  mcd_wait_ack(CMD_PLAY_MOD);
+  g_music_playing = 1;
+  g_music_idx     = idx;
+}
+
 /* Advance to the next wave: clear active enemies + spikes, swap web shape,
  * re-bake variants, refill pool. ~6-10 s freeze on the bake (no fly-down
  * transition yet — see project_megacd_port memory for future polish). */
@@ -541,6 +574,7 @@ static void next_wave(void)
   vdp_data    = 0x0EEE;    /* reset cram[1] in case the bake pulsed it */
 
   load_wave_pool(g_wave_num);
+  switch_wave_music(g_wave_num);   /* may or may not swap; no-op if same tune */
   g_wave_clear_timer = 0;
   g_zoom_out_frame   = 0;   /* web_clear_plane_b already reset VSRAM */
   g_scene_dirty = 1;       /* repaint HUD next frame */
@@ -663,17 +697,8 @@ static void install_playfield(void)
   vdp_ctrl_32 = to_vdp_addr(1 * 2) | CRAM_W;
   vdp_data    = 0x0EEE;
 
-  /* Level is fully rendered — swap the title theme for rave4. */
-  if (g_mcd_present) {
-    if (g_music_playing) {
-      mcd_stop_mod();
-      mcd_wait_ack(CMD_STOP_MOD);
-    }
-    mcd_upload_mod(&res_rave4_mod);
-    mcd_play_mod(res_rave4_mod.size);
-    mcd_wait_ack(CMD_PLAY_MOD);
-    g_music_playing = 1;
-  }
+  /* Level is fully rendered — swap the title theme for the wave's tune. */
+  switch_wave_music(g_wave_num);
 }
 
 static void play_gated_vblank(void)
