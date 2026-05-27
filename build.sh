@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 # Build wrapper for the Tempest 2000 Mega CD Mode 1 cart.
 # Builds the Sub CPU module first (spx.smd) then the cart, patches the
-# 'C' device-support flag at offset $191, optionally launches BlastEm.
+# 'C' device-support flag at offset $191.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
+if [ ! -d "$HERE/../megadev" ]; then
+  echo "error: ../megadev not found." >&2
+  echo "this build needs the megadev framework checked out next to" >&2
+  echo "this project. From the parent dir:" >&2
+  echo "  git clone https://github.com/drojaazu/megadev" >&2
+  exit 1
+fi
 MEGADEV="$(cd "$HERE/../megadev" && pwd)"
 SUB="$HERE/sub"
 
-LAUNCH=0
-MAKE_ARGS=()
-for a in "$@"; do
-  if [ "$a" = "run" ]; then LAUNCH=1; else MAKE_ARGS+=("$a"); fi
-done
+MAKE_ARGS=("$@")
 
 run_megadev_make() {
   local dir="$1"; shift
@@ -69,7 +72,3 @@ else:
 
 cp "$ROM" "$HERE/../megacd-port.bin"
 echo "built: $HERE/../megacd-port.bin"
-
-if [ "$LAUNCH" = "1" ]; then
-  /Users/pleft/Dev/sega/blastem/blastem "$HERE/../megacd-port.bin" &
-fi
