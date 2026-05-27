@@ -94,6 +94,9 @@ The megadev linker script anchors `.data` at `0xFF0000`, which makes objcopy pad
 ### Color fidelity
 The web uses an 8-step pure-blue gradient across CRAM slots 5-8 + 12-15 (every valid `xBGR` blue intensity from `0x2` to `0xE`), with the outline at `0x0E80` to match the Jag's electric-blue rim. The player claw still uses yellow on slot 11.
 
+### Original font
+On-screen text (HUD, LOADING, GAME OVER, scene messages) renders in the Jaguar T2K "small regular font" (`cfont` per `yak.s:19163`). We extract it from `tempest2k-source/src/dat/cfont.dat` + `images/beasty3.cry`, threshold the CRY16 Y-channel at `0x80` (keeps just the bright letter core, drops the anti-alias halo), and emit a raw 4bpp 96-glyph tile blob the megadev DMA helper uploads to VRAM at boot.
+
 ---
 
 ## Build
@@ -138,4 +141,4 @@ On real hardware: flash to a flashcart that supports Mode 1, attach to a Mega CD
 
 ## License + redistribution
 
-Source code under this project is provided for educational and homebrew purposes. Tempest 2000 itself is © Atari / Llamasoft. The MOD music files (`rave4.mod`, `tune5.mod`, `tune7.mod`, `tune12.mod`, `tune13.mod`) and polygon/sprite data are derived from the original game; redistribution beyond personal use should respect the rights of the original creators.
+Source code under this project is provided for educational and homebrew purposes. Tempest 2000 itself is © Atari / Llamasoft. The MOD music files (`rave4.mod`, `tune5.mod`, `tune7.mod`, `tune12.mod`, `tune13.mod`), the on-screen font tiles, and the polygon/sprite data are all derived from the original game; redistribution beyond personal use should respect the rights of the original creators.
