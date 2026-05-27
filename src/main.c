@@ -1251,8 +1251,8 @@ void main(void)
 
   // Upload font into VRAM tile area starting at glyph 0x20 (' ').
   vdp_ctrl = mode2_dma_enable;
-  vdp_dma_transfer(res_basic_font.data, to_vdp_addr(tile_offset(0x20)),
-                   (u16) (res_basic_font.size / 2));
+  vdp_dma_transfer(res_font.data, to_vdp_addr(tile_offset(0x20)),
+                   (u16) (res_font.size / 2));
   vdp_ctrl = mode2_display_off;
 
   /* Star tile data — 4 variants with the bright pixel in different cell

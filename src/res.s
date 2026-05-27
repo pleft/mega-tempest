@@ -2,7 +2,10 @@
 .section .rodata
 #include "macros.s"
 
-FILE "basic_font.md.chr", res_basic_font
+// Font tiles uploaded to VRAM starting at glyph 0x20 (' '). Tempest font
+// extracted from the Jaguar's cfont.dat / beasty3.cry — see
+// tools/extract_font.py to regenerate.
+FILE "tempest_font.md.chr", res_font
 
 GLABEL res_megadev_pal
 .incbin "megadev.md.pal"
