@@ -22,7 +22,7 @@ For a port of Tempest 2000 — a 60 Hz vector-3D shooter with full MOD-tracker m
                          ┌─────────────────────────┐
    ┌────────────┐        │     MEGA DRIVE          │
    │  CART ROM  │◄───────│  Main 68000  ─────►  VDP│   (sprites, planes, web)
-   │   ~280 KB  │        │      │                  │
+   │   ~615 KB  │        │      │                  │
    └────────────┘        └──────┼──────────────────┘
                                 │ gate-array comm regs
                                 ▼
@@ -58,7 +58,7 @@ For a port of Tempest 2000 — a 60 Hz vector-3D shooter with full MOD-tracker m
 - 16 pre-rasterised "lane variants" of the web (~12.8 KB each), one per player position around the rim. Per-vertex 1/Z perspective baked in.
 - Per frame, the variant matching the player's current lane gets DMA'd to VRAM — gives true 3D web parallax at 60 Hz without per-frame software rasterising.
 
-**PRG RAM** holds the active MOD file (`rave4.mod` for gameplay, `tune13.mod` for the title screen — both lifted from the Jag source's tune table).
+**PRG RAM** holds the active MOD file (one of `rave4 / tune7 / tune5 / tune12` for gameplay, `tune13` for the title screen — all five lifted from the Jag source's tune table).
 
 ---
 
@@ -70,7 +70,7 @@ For a port of Tempest 2000 — a 60 Hz vector-3D shooter with full MOD-tracker m
 - **Web shape rotation** — 8 shapes from the Jag (V, square, plus, triangle, pentagon, star, W, fan) extracted directly from `yak.s`
 - **3-life player loop** → game over → high-score persistence in HUD
 - **Iconic fly-down-tube wave transition** rendered by the Mega CD ASIC
-- **MOD music** — separate title and gameplay themes, continuous through scene transitions
+- **MOD music** — separate title theme + 4 gameplay tracks (`rave4`, `tune7`, `tune5`, `tune12`) cycled per wave, matching the Jaguar's own `webtunes[]` set. Music keeps playing continuously through scene transitions.
 
 ---
 
@@ -88,8 +88,8 @@ Plane A holds a sparse pseudo-random scatter of single-pixel stars across the fu
 ### Entity pool with field reuse
 Every game object — flipper, tanker, pulsar, fuseball, spiker, debris particle, superzapper spark — is one entry in a fixed 32-slot pool. Each new entity type **overloads existing struct fields** with per-type semantics rather than widening the struct. This is a hard-won rule: an earlier session lost ~10 hours to a struct-widening bug that turned out to be a memory-corruption-class issue we couldn't isolate, and never reproduced after reverting.
 
-### ROM size: 16 MB → ~280 KB
-The megadev linker script anchors `.data` at `0xFF0000`, which makes objcopy pad the output binary to that offset. We trim back to `_rom_end` (read from the sym file) after the build — cart binary down from a default 16 MB to actually-used ~280 KB.
+### ROM size: 16 MB → ~615 KB
+The megadev linker script anchors `.data` at `0xFF0000`, which makes objcopy pad the output binary to that offset. We trim back to `_rom_end` (read from the sym file) after the build — cart binary down from a default 16 MB to actually-used ~615 KB (most of which is the 5 MOD files).
 
 ### Color fidelity
 The web uses an 8-step pure-blue gradient across CRAM slots 5-8 + 12-15 (every valid `xBGR` blue intensity from `0x2` to `0xE`), with the outline at `0x0E80` to match the Jag's electric-blue rim. The player claw still uses yellow on slot 11.
@@ -100,7 +100,7 @@ The web uses an 8-step pure-blue gradient across CRAM slots 5-8 + 12-15 (every v
 
 ```sh
 ./build.sh            # docker-wrapped megadev toolchain;
-                      # outputs ../megacd-port.bin (~280 KB)
+                      # outputs ../megacd-port.bin (~615 KB)
 ```
 
 Sub CPU module (`sub/spx.smd`) builds first, then the cart links the sub binary in via `.incbin`.
