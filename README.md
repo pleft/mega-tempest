@@ -1,4 +1,4 @@
-# Tempest 2000 — Sega Mega CD (Mode 1 Cart)
+# MEGA TEMPEST — Sega Mega CD (Mode 1 Cart)
 
 A from-scratch port of Atari Jaguar's **Tempest 2000** (Llamasoft / Atari, 1994) to the **Sega Mega Drive + Mega CD**. Plays as a **Mode 1 cartridge** — code lives on a Mega Drive cart, but uses the Mega CD's Sub CPU, Word RAM, and RF5C164 PCM chip for audio and graphics work the standalone Mega Drive can't do alone.
 
@@ -64,6 +64,7 @@ For a port of Tempest 2000 — a 60 Hz vector-3D shooter with full MOD-tracker m
 
 ## Game features
 
+- **Animated title screen** — drifting stars, flashing START prompt, "MEGA TEMPEST" banner rendered + pulsed by the Mega CD ASIC every frame
 - **All 5 core enemies** from the Jaguar original: Flipper, Tanker (splits into 2 flippers), Pulsar (pulse-gated kill), Fuseball (erratic lane-hopper), Spiker + Spike obstacles
 - **Per-wave progression** — 16 waves, each with its own enemy quota and shape, then loops forever with escalating difficulty
 - **"WAVE N — GET READY" splash** between waves, freezing the action for ~1.5 s
@@ -128,7 +129,7 @@ On real hardware: flash to a flashcart that supports Mode 1, attach to a Mega CD
 | **D-pad ◀ ▶** | — | walk lanes | — |
 | **A** | — | fire | — |
 | **B** | — | superzapper (1 charge per wave) | — |
-| **C** | cycle preview shape | (debug) force wave transition | — |
+| **C** | — | (debug) force wave transition | — |
 | **START** | begin play | **pause / resume** | back to title |
 
 ---
