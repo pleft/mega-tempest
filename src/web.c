@@ -844,12 +844,15 @@ void render_sprites(void)
    * and the claw rotation rolls through a full revolution per lane change
    * (g_claw_render_idx, animated by web_claw_tick).
    * Hidden during the death animation (g_respawn_timer > 0). */
-  extern u8 g_respawn_timer;
+  extern u8  g_respawn_timer;
+  extern u16 g_jump_timer;
   if (g_respawn_timer == 0) {
     for (Entity * e = g_active_head; e; e = e->next) {
       if (e->type != E_PLAYER || n >= SPR_MAX) continue;
       s16 px, py;
       web_player_render_pos(e->depth_fp, &px, &py);
+      /* Jump power-up: claw visibly lifts off the rim while active. */
+      if (g_jump_timer) py = (s16) (py - 12);
       SpriteSizeDef sz = { SPR_SIZE_2x2,
                            (u16) (PLAYER_TILE_BASE + g_claw_render_idx * PLAYER_TILES_PER_LANE),
                            8 };
@@ -951,6 +954,19 @@ void render_sprites(void)
     s16 px = web_pixel_x(k, g_spike_depth[k]);
     s16 py = web_pixel_y(k, g_spike_depth[k]);
     emit_sprite_depth(spr_buf, n++, &SHOT_SIZE, px, py, g_spike_depth[k]);
+  }
+
+  /* Pass 8.5: POWER-UPS — drifting "L" or "J" glyphs that the player
+   * collects at the rim. Phase = PUP_LASER (0) → 'L', PUP_JUMP (1) → 'J'.
+   * Font tiles live in VRAM starting at tile 0x20 (the font DMA at boot)
+   * so the glyph index is 0x20 + (char - 0x20) = the ASCII code. */
+  for (Entity * e = g_active_head; e; e = e->next) {
+    if (e->type != E_POWERUP || n >= SPR_MAX) continue;
+    s16 px = web_pixel_x(e->lane, e->depth_fp);
+    s16 py = web_pixel_y(e->lane, e->depth_fp);
+    u16 glyph = (e->phase == 0) ? 'L' : 'J';
+    SpriteSizeDef sz = { SPR_SIZE_1x1, glyph, 4 };
+    emit_sprite_depth(spr_buf, n++, &sz, px, py, e->depth_fp);
   }
 
   /* Pass 9: ZAPSPARKS — superzapper kill markers. Stationary white dots

@@ -340,6 +340,21 @@ static u16 g_splash_timer;
 #define BONUS_LIFE_EVERY 4
 static u8 g_bonus_life_pending;
 
+/* Power-ups — dropped by killed tankers, drift outward to the rim.
+ * Collected when reaching the rim on the player's lane. Two kinds:
+ *   PUP_LASER → halves fire cooldown for LASER_FRAMES (~5 s).
+ *   PUP_JUMP  → claw lifts above the rim, immune to rim deaths,
+ *               for JUMP_FRAMES (~1 s).
+ * g_pup_drop_count cycles through tanker kills so the kind alternates. */
+#define PUP_LASER     0
+#define PUP_JUMP      1
+#define PUP_OUT_STEP  (FP_ONE >> 9)    /* ~8 s to drift the lane — slow enough to chase */
+#define LASER_FRAMES  300              /* ~5 s of fast fire */
+#define JUMP_FRAMES   60               /* ~1 s of claw lift + invulnerability */
+static u16 g_laser_timer;
+u16        g_jump_timer;    /* non-static: web.c reads it for claw-lift */
+static u8  g_pup_drop_count;
+
 /* Per-wave music cycle: every wave swaps in a new MOD from this 4-entry
  * pool. Matches the Jaguar's webtunes[] set (yak.s:19152) — rave4 /
  * tune7 / tune5 / tune12 — but cycles every wave instead of every 32
@@ -507,6 +522,21 @@ static void spawn_spiker(u8 lane)
   g_enemy_count++;
 }
 
+/* Spawn a power-up that drifts outward to the rim. `kind` is PUP_LASER
+ * or PUP_JUMP. Not an enemy — doesn't count against g_enemy_count. */
+static void spawn_powerup(u8 lane, fp16 depth, u8 kind)
+{
+  Entity * e = entity_spawn();
+  if (!e) return;
+  e->type         = E_POWERUP;
+  e->lane         = lane;
+  e->depth_fp     = depth;
+  e->depth_vel_fp = +PUP_OUT_STEP;
+  e->phase        = kind;        /* 0 = laser, 1 = jump */
+  e->step_period  = 0;
+  e->lifetime     = 0;
+}
+
 static void kill_enemy(Entity * e);    /* forward decl — defined below */
 
 /* Fire the superzapper: kill every live enemy entity AND spawn a zapspark
@@ -652,9 +682,15 @@ static void next_wave(void)
  * current depth and kill the tanker. */
 static void split_tanker(Entity * t)
 {
-  u8 lane = t->lane;
-  spawn_flipper_at(web_lane_left(lane),  t->depth_fp);
-  spawn_flipper_at(web_lane_right(lane), t->depth_fp);
+  u8   lane  = t->lane;
+  fp16 depth = t->depth_fp;
+  spawn_flipper_at(web_lane_left(lane),  depth);
+  spawn_flipper_at(web_lane_right(lane), depth);
+  /* Drop a power-up at the tanker's lane. Kind alternates per tanker
+   * killed so the player sees both types over time. */
+  u8 kind = (u8) (g_pup_drop_count & 1);
+  g_pup_drop_count++;
+  spawn_powerup(lane, depth, kind);
   g_enemy_count--;        /* the tanker itself */
   entity_kill(t);
 }
@@ -785,6 +821,10 @@ static void play_gated_vblank(void)
   g_anim_frame++;     /* drives flipper rotation (4 frames, 8 ticks each) */
   update_starfield(); /* drifts star dots through the cell once per ~2 s */
 
+  /* Power-up effect timers. */
+  if (g_laser_timer) g_laser_timer--;
+  if (g_jump_timer)  g_jump_timer--;
+
   /* Superzapper screen flash — cram[0] (background) swaps to white for
    * ZAP_FLASH_FRAMES, restores to black when the counter hits zero. */
   if (g_zap_flash) {
@@ -840,7 +880,7 @@ static void play_gated_vblank(void)
     if (g_fire_cooldown) g_fire_cooldown--;
     if ((p1_single & PAD_A) && g_fire_cooldown == 0) {
       spawn_shot(g_player_lane);
-      g_fire_cooldown = FIRE_COOLDOWN;
+      g_fire_cooldown = g_laser_timer ? (FIRE_COOLDOWN / 2) : FIRE_COOLDOWN;
     }
     /* Superzapper on B — instant kill of every live enemy. 1 charge per
      * wave. Spikes are terrain, not enemies; they survive. */
@@ -971,6 +1011,21 @@ static void play_gated_vblank(void)
       /* Stationary; just count down to despawn. */
       if (e->lifetime) e->lifetime--;
       if (e->lifetime == 0) entity_kill(e);
+    } else if (e->type == E_POWERUP) {
+      /* Drift outward toward the rim. On reaching it, check if the
+       * player is on the same lane → collect + activate. Otherwise
+       * the power-up just expires. */
+      e->depth_fp += e->depth_vel_fp;
+      if (e->depth_fp >= FP_ONE) {
+        if (e->lane == g_player_lane && g_respawn_timer == 0) {
+          if (e->phase == PUP_LASER) g_laser_timer = LASER_FRAMES;
+          else                       g_jump_timer  = JUMP_FRAMES;
+          g_score += 5;
+          if (g_mcd_present) mcd_play_sfx(1);    /* re-use HIT cue */
+          else               sfx_hit();
+        }
+        entity_kill(e);
+      }
     }
     e = next;
   }
@@ -1029,8 +1084,9 @@ static void play_gated_vblank(void)
   }
 
   /* Spike-at-rim on player's lane → death. Handled before the enemy-rim
-   * check so a spike alone is enough to kill (no enemy needed). */
-  if (g_player && g_respawn_timer == 0 &&
+   * check so a spike alone is enough to kill (no enemy needed).
+   * Jump power-up grants temporary invulnerability. */
+  if (g_player && g_respawn_timer == 0 && g_jump_timer == 0 &&
       g_spike_depth[g_player_lane] >= SPIKE_KILL_THRESH) {
     g_death_x = web_pixel_x(g_player_lane, FP_ONE);
     g_death_y = web_pixel_y(g_player_lane, FP_ONE);
@@ -1048,7 +1104,8 @@ static void play_gated_vblank(void)
   // Flipper-at-rim on player's lane → death (delayed respawn).
   // Guarded by g_respawn_timer so a second flipper on the same lane
   // can't re-trigger the death effect while the burst is playing.
-  if (g_player && g_respawn_timer == 0) {
+  // Jump power-up grants temporary invulnerability.
+  if (g_player && g_respawn_timer == 0 && g_jump_timer == 0) {
     Entity * f = g_active_head;
     while (f) {
       Entity * f_next = f->next;
@@ -1221,6 +1278,10 @@ static void play_main_thread(void)
 
   // Superzapper charge — single digit.
   plane_putc(14, 27, (char) ('0' + g_superzapper_charges));
+
+  /* Active power-up indicator at col 24-25 (between WAVE digits and SCORE). */
+  plane_putc(24, 27, g_laser_timer ? 'L' : ' ');
+  plane_putc(25, 27, g_jump_timer  ? 'J' : ' ');
 
   // Wave readout — 2 digits, 1-based display.
   u16 w = (u16) (g_wave_num + 1);

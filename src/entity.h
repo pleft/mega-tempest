@@ -42,6 +42,11 @@ typedef enum {
   E_ZAPSPARK = 9,   // superzapper kill marker — stationary at a lane+depth
                     // for a few frames, then vanishes. Reuses lane/depth_fp
                     // for screen position, lifetime for countdown.
+  E_POWERUP  = 10,  // dropped by killed tankers; travels outward to the
+                    // rim like a flipper. Player collects by being on the
+                    // same lane when it arrives. Field reuse:
+                    //   lane, depth_fp, depth_vel_fp     — standard
+                    //   phase (0=LASER, 1=JUMP)          — power-up kind
 } EntityType;
 
 struct Entity {
