@@ -634,18 +634,19 @@ static void render_warp(void)
  * sample and just fits in this slot. */
 #define SFX_BANK       0x60          /* PCM offset $6000 */
 
-/* Table mapping SFX index → (data, length). Order must match SFX_IDX_*
- * constants in sfx_data.h (0=FIRE, 1=HIT, 2=DEATH). */
+/* Table mapping SFX index → (data, length). Order must match the
+ * caller's constants (0=FIRE, 1=HIT, 2=DEATH, 3=ZAP). */
 typedef struct { const uint8_t * data; uint16_t len; } sfx_entry_t;
-static const sfx_entry_t SFX_TABLE[3] = {
+static const sfx_entry_t SFX_TABLE[4] = {
   { SFX_FIRE,  sizeof SFX_FIRE  },
   { SFX_HIT,   sizeof SFX_HIT   },
   { SFX_DEATH, sizeof SFX_DEATH },
+  { SFX_ZAP,   sizeof SFX_ZAP   },
 };
 
 static void sfx_play(uint8_t idx)
 {
-  if (idx >= 3) return;
+  if (idx >= 4) return;
   const sfx_entry_t * e = &SFX_TABLE[idx];
 
   /* MASK INTERRUPTS for the entire sfx_play. mod_tick (50 Hz timer)

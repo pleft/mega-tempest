@@ -493,9 +493,10 @@ static void trigger_superzapper(void)
     e = next;
   }
   g_zap_flash = ZAP_FLASH_FRAMES;
-  /* HIT sample = "enemy killed" — closest match to the zap killing many. */
-  if (g_mcd_present) mcd_play_sfx(1);
-  else               sfx_hit();
+  /* ZAP = "Crackle" PCM (sfx 7 in Jag's samtab, file 08) — matches
+   * the original superzapper sound (yak.s:9721). */
+  if (g_mcd_present) mcd_play_sfx(3);
+  else               sfx_hit();        /* PSG fallback — no zap synth */
 }
 
 /* Total enemies remaining in the spawn pool. */

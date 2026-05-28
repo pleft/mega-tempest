@@ -17,6 +17,7 @@ Sample table from tempest2k-source/src/images_sounds.s:
     file 06  -> sample 5  "Player Shot Normal"   (1956 B IFF, 1856 B PCM)
     file 17  -> sample 16 "Normal Explosion"     (10934 B raw PCM)
     file 04  -> sample 3  "Player Death"         (21658 B raw PCM)
+    file 08  -> sample 7  "Crackle"              (17812 B raw PCM) — superzapper
 
 All at ~8363 Hz per the 8SVX header on sample 06; the raw samples don't
 state a rate but the source plays them at the same period $01ac/$00d6
@@ -38,9 +39,13 @@ if not JAG_SRC.is_dir():
              "  Clone it: git clone https://github.com/mwenge/tempest2k")
 
 SFX = [
-    ("FIRE",  "06", True),      # IFF 8SVX wrapper
-    ("HIT",   "17", False),     # raw PCM
-    ("DEATH", "04", False),     # raw PCM
+    # (name, file, wrapped, max_pcm_bytes)
+    ("FIRE",  "06", True,  None),    # IFF 8SVX wrapper
+    ("HIT",   "17", False, None),    # raw PCM
+    ("DEATH", "04", False, None),    # raw PCM
+    # Crackle is 17812 bytes (~2.1 s at 8363 Hz). Trim to ~7 KB (~0.8 s)
+    # so the whole sub module still fits in MODULE_ROM_LENGTH = 0xE000.
+    ("ZAP",   "08", False, 7000),    # raw PCM — sfx 7 "Crackle" in yak.s
 ]
 
 
@@ -73,9 +78,11 @@ def to_sign_magnitude(signed_pcm):
 
 def main():
     blobs = []
-    for name, fn, wrapped in SFX:
+    for name, fn, wrapped, max_bytes in SFX:
         raw = (JAG_SRC / fn).read_bytes()
         pcm = strip_8svx(raw) if wrapped else raw
+        if max_bytes is not None and len(pcm) > max_bytes:
+            pcm = pcm[:max_bytes]
         # Append 32 $FF bytes — matching pcm.c's loop_markers[] convention.
         # The chip advances past a single $FF before fully halting playback,
         # which lets it skid into stale data behind the sample and produce
