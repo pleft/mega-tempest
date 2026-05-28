@@ -290,6 +290,12 @@ static u8  g_zoom_out_frame;    // 0 = idle; 1..ZOOM_OUT_FRAMES while zooming
 static u16 g_splash_timer;
 #define SPLASH_FRAMES 90
 
+/* Bonus life: every BONUS_LIFE_EVERY waves cleared, +1 life (capped at
+ * the HUD's single-digit ceiling). g_bonus_life_pending is consumed by
+ * the wave splash to also draw a "1UP!" line. */
+#define BONUS_LIFE_EVERY 4
+static u8 g_bonus_life_pending;
+
 /* Per-wave music cycle: every wave swaps in a new MOD from this 4-entry
  * pool. Matches the Jaguar's webtunes[] set (yak.s:19152) — rave4 /
  * tune7 / tune5 / tune12 — but cycles every wave instead of every 32
@@ -549,6 +555,15 @@ static void next_wave(void)
   }
   g_enemy_count = 0;
   for (u8 k = 0; k < MAX_LANES; ++k) { g_spike_depth[k] = 0; g_spike_flash[k] = 0; }
+
+  /* Bonus-life check before the wave counter ticks: completing wave N
+   * (1-based) earns a life when N % BONUS_LIFE_EVERY == 0. The flag is
+   * picked up by the wave splash. */
+  u16 completed_wave = (u16) (g_wave_num + 1);
+  if (completed_wave % BONUS_LIFE_EVERY == 0 && g_lives < 9) {
+    g_lives++;
+    g_bonus_life_pending = 1;
+  }
 
   g_wave_num++;
   g_web_shape = (u8) (g_wave_num % WEB_SHAPE_COUNT);
@@ -1121,9 +1136,12 @@ static void play_main_thread(void)
       plane_putc(17, 14, (char) ('0' + (w % 10)));
       plane_putc(16, 14, (char) ('0' + (w / 10)));
       print("GET READY", plane_xy(20, 14));
+      if (g_bonus_life_pending) print("1UP!", plane_xy(18, 16));
     }
     if (!cur_splash && prev_splash) {
-      print("                  ", plane_xy(11, 14));   /* 18 spaces */
+      print("                  ", plane_xy(11, 14));   /* WAVE line */
+      print("      ",             plane_xy(18, 16));   /* 1UP line  */
+      g_bonus_life_pending = 0;
     }
     prev_splash = cur_splash;
   }
