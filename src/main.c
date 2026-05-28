@@ -283,6 +283,13 @@ static u8  g_wave_clear_timer;  // counts up while wave-clear conditions hold
 static u8  g_zoom_out_frame;    // 0 = idle; 1..ZOOM_OUT_FRAMES while zooming
 #define ZOOM_OUT_FRAMES 28      // 28 frames * 8 px = 224 px = off-screen
 
+/* Wave-start splash: shows "WAVE NN — GET READY" centred for SPLASH_FRAMES
+ * after each wave's bake finishes (incl. wave 0 from install_playfield).
+ * Gated_vblank skips while > 0 — claw + enemies freeze; main_thread keeps
+ * running so HUD + splash text render. */
+static u16 g_splash_timer;
+#define SPLASH_FRAMES 90
+
 /* Per-wave music cycle: every wave swaps in a new MOD from this 4-entry
  * pool. Matches the Jaguar's webtunes[] set (yak.s:19152) — rave4 /
  * tune7 / tune5 / tune12 — but cycles every wave instead of every 32
@@ -577,6 +584,7 @@ static void next_wave(void)
   switch_wave_music(g_wave_num);   /* may or may not swap; no-op if same tune */
   g_wave_clear_timer = 0;
   g_zoom_out_frame   = 0;   /* web_clear_plane_b already reset VSRAM */
+  g_splash_timer     = SPLASH_FRAMES;
   g_scene_dirty = 1;       /* repaint HUD next frame */
 }
 
@@ -699,10 +707,21 @@ static void install_playfield(void)
 
   /* Level is fully rendered — swap the title theme for the wave's tune. */
   switch_wave_music(g_wave_num);
+
+  /* Arm the wave-start splash — freezes the gated_vblank for SPLASH_FRAMES
+   * so the player gets a beat to read "WAVE 01 — GET READY". */
+  g_splash_timer = SPLASH_FRAMES;
 }
 
 static void play_gated_vblank(void)
 {
+  /* Wave-start splash is gating everything below — count it down and bail.
+   * Tick before the early return so the cycle still completes. */
+  if (g_splash_timer) {
+    g_splash_timer--;
+    return;
+  }
+
   g_anim_frame++;     /* drives flipper rotation (4 frames, 8 ticks each) */
   update_starfield(); /* drifts star dots through the cell once per ~2 s */
 
@@ -1089,6 +1108,24 @@ static void play_main_thread(void)
     print("SZ:",    plane_xy(11, 27));     /* +1 col: spacer after LIVES digit */
     print("WAVE:",  plane_xy(16, 27));     /* +1 col: spacer after SZ digit    */
     g_scene_dirty = 0;
+  }
+
+  /* Wave-start splash. Painted once on rising edge of g_splash_timer,
+   * wiped once on falling edge — no need to repaint every frame. */
+  {
+    static u8 prev_splash = 0;
+    u8 cur_splash = (g_splash_timer > 0) ? 1 : 0;
+    if (cur_splash && !prev_splash) {
+      print("WAVE",      plane_xy(11, 14));
+      u16 w = (u16) (g_wave_num + 1);
+      plane_putc(17, 14, (char) ('0' + (w % 10)));
+      plane_putc(16, 14, (char) ('0' + (w / 10)));
+      print("GET READY", plane_xy(20, 14));
+    }
+    if (!cur_splash && prev_splash) {
+      print("                  ", plane_xy(11, 14));   /* 18 spaces */
+    }
+    prev_splash = cur_splash;
   }
 
   /* START toggles pause. g_engine.paused gates gated_vblank in the main
