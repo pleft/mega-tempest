@@ -45,6 +45,11 @@ void mcd_asic_load_tempest_test_stamp(void);
  * arrange them in the stamp map's top-left 4x4 cells, ready for ASIC
  * perspective render. line_pal is the palette index for the lane lines. */
 void mcd_asic_load_web_stamps(u8 line_pal);
+
+/* Pack g_web_buf (already filled by the caller — text, sprite, etc.)
+ * into the 5×5 ASIC stamp area + map. Same backend as
+ * mcd_asic_load_web_stamps but skipping the web render. */
+void mcd_asic_pack_buf_to_stamps(void);
 void mcd_asic_load_map_diagnostic(void);
 
 /* Pre-render N web variants (one per lane) into Word RAM, each rendered

@@ -193,8 +193,29 @@ static void gameover_main_thread(void);
 
 // ---- Scene: TITLE ---------------------------------------------------------
 
+/* Forward — g_anim_frame is defined in the play-scene section below. */
+extern u8 g_anim_frame;
+
 static void title_always_vblank(void) { return; }
-static void title_gated_vblank (void) { return; }
+static void title_gated_vblank (void)
+{
+  /* Keep the starfield drifting on the title screen too. update_starfield
+   * gates on g_anim_frame, so tick it here as well as in play. */
+  g_anim_frame++;
+  update_starfield();
+
+  /* ASIC pulse on the "MEGA TEMPEST" banner. dx sweeps symmetrically
+   * around identity (0x0800) so the text both grows AND shrinks past
+   * its baseline size — wider range than before for a more dramatic
+   * pulse. IMG painted at plane_x=9, plane_y=1 so the text sits
+   * higher on screen and lines up horizontally with START = PLAY. */
+  if (g_mcd_present) {
+    u8 t   = (u8) ((g_anim_frame >> 1) & 0x7F);      /* 0..127 */
+    u8 tri = (t < 64) ? t : (u8) (127 - t);          /* 0..63..0 triangle */
+    s16 dx = (s16) (0x0800 + ((s16) tri - 32) * 0x30);  /* 0x0200..0x0DD0 */
+    mcd_render_asic_scale(0x4000, 0x280, 9, 1, dx);
+  }
+}
 
 static void install_title(void)
 {
@@ -219,6 +240,29 @@ static void install_title(void)
     g_music_idx     = 0xFF;       /* gameplay tune state invalidated */
   }
   web_clear_plane_b();
+
+  /* Bake the "MEGA TEMPEST" banner into ASIC stamps. We paint the text
+   * tiles into g_web_buf (which is the same buffer mcd_asic_pack_buf_to_stamps
+   * reads from), then ship it to the stamp area in Word RAM. title_gated_vblank
+   * fires per-frame CMD_RENDER_SCALE to pulse it. */
+  if (g_mcd_present) {
+    u8 * buf = web_get_buf();
+    /* Clear the whole 20x20-cell source buffer first. */
+    for (u16 i = 0; i < (20 * 20 * 32); ++i) buf[i] = 0;
+    /* Paint "MEGA TEMPEST" at cells (4, 10) → (15, 10) — centred in the
+     * 20-cell-wide source. Each glyph is one 32-byte font tile copied
+     * straight from res_font into its cell. */
+    static const char BANNER[] = "MEGA TEMPEST";
+    u8 cy = 10;
+    for (u8 i = 0; i < 12; ++i) {
+      u8 cx  = (u8) (4 + i);
+      u8 idx = (u8) (BANNER[i] - 0x20);
+      u8 *       dst = buf + ((u16) cy * 20 + cx) * 32;
+      u8 const * src = (u8 const *) res_font.data + (u16) idx * 32;
+      for (u8 b = 0; b < 32; ++b) dst[b] = src[b];
+    }
+    mcd_asic_pack_buf_to_stamps();
+  }
 }
 
 // ---- Scene: PLAYFIELD (web + player) -------------------------------------
@@ -1098,21 +1142,28 @@ static void title_main_thread(void)
 {
   if (g_scene_dirty) {
     clear_play_area();
-    print("TEMPEST 2000",       plane_xy(14, 6));
-    print("MEGA CD PORT",       plane_xy(14, 8));
-    print("MCD:",               plane_xy(2, 12));
-    print(g_mcd_present ? "PRESENT" : "ABSENT ", plane_xy(7, 12));
-    print("START = PLAY",       plane_xy(13, 16));
-    print("    C = NEXT SHAPE", plane_xy(13, 17));
-    print("WEB:",               plane_xy(2, 20));
+    /* "MEGA TEMPEST" is rendered on plane B via the ASIC engine — see
+     * install_title for the bake and title_gated_vblank for the per-
+     * frame zoom pulse. The plane-A print used to live here. */
+    /* MCD presence readout tucked in the lower-right corner. */
+    print("MCD:",         plane_xy(28, 27));
+    print(g_mcd_present ? "PRESENT" : "ABSENT ", plane_xy(33, 27));
     g_scene_dirty = 0;
   }
-  print(WEB_SHAPE_NAMES[g_web_shape], plane_xy(7, 20));
+
+  /* Flash "START = PLAY" — ~0.5 s on / 0.5 s off via the global anim
+   * counter ticked by title_gated_vblank. */
+  {
+    static u8 prev_flash = 0xFF;
+    u8 cur_flash = (u8) ((g_anim_frame >> 5) & 1);
+    if (cur_flash != prev_flash) {
+      if (cur_flash) print("START = PLAY", plane_xy(13, 16));
+      else           print("            ", plane_xy(13, 16));
+      prev_flash = cur_flash;
+    }
+  }
 
   if (p1_single & PAD_START) install_playfield();
-  if (p1_single & PAD_C) {
-    g_web_shape = (u8) ((g_web_shape + 1) % WEB_SHAPE_COUNT);
-  }
 }
 
 static void play_main_thread(void)

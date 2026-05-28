@@ -321,17 +321,14 @@ static void web_buf_dilate(u8 * buf, u8 line_pal)
   }
 }
 
-void mcd_asic_load_web_stamps(u8 line_pal)
+/* Pack g_web_buf cells (5x5 stamps × 4x4 cells each = 20x20 cells) into
+ * ASIC stamps + map. Caller has already filled g_web_buf with whatever
+ * source content they want (web, text, etc.). Same logic as the bottom
+ * of mcd_asic_load_web_stamps — extracted so other callers can reuse. */
+void mcd_asic_pack_buf_to_stamps(void)
 {
-  /* Render 208x208 software web into g_web_buf (26x26 cells) at scale
-   * 5/4 → web rim radius 75 → web spans buffer pixels (29..179). */
-  web_render_main(line_pal);
-
   wait_2m_main_to(0x80000);
 
-  /* Pack 5x5 = 25 stamps from g_web_buf cells (0..19) — full 160x160
-   * software web at scale 5/4 (rim 75, 5px margin for camera pan). */
-  enum { EXTRACT_OFFSET = 0 };
   for (u8 mc = 0; mc < 5; ++mc) {
     for (u8 mr = 0; mr < 5; ++mr) {
       u8 stamp_idx = (u8) (mc * 5 + mr + 1);          /* 1..25 */
@@ -339,8 +336,8 @@ void mcd_asic_load_web_stamps(u8 line_pal)
       for (u8 t = 0; t < 16; ++t) {
         u8 in_col = t >> 2;
         u8 in_row = t & 3;
-        u8 src_gc = (u8) (EXTRACT_OFFSET + mc * 4 + in_col);
-        u8 src_gr = (u8) (EXTRACT_OFFSET + mr * 4 + in_row);
+        u8 src_gc = (u8) (mc * 4 + in_col);
+        u8 src_gr = (u8) (mr * 4 + in_row);
         u16 src_off = (u16) ((u16) src_gr * WEB_BUF_CELLS + src_gc) * 32;
         volatile u8 * dst_tile = stamp + (u16) t * 32;
         u8 const * src_tile = web_get_buf() + src_off;
@@ -359,6 +356,14 @@ void mcd_asic_load_web_stamps(u8 line_pal)
     }
   }
   copy_words((const char *) map_buf, (volatile u16 *) WR_STAMP_MAP, 512);
+}
+
+void mcd_asic_load_web_stamps(u8 line_pal)
+{
+  /* Render 208x208 software web into g_web_buf (26x26 cells) at scale
+   * 5/4 → web rim radius 75 → web spans buffer pixels (29..179). */
+  web_render_main(line_pal);
+  mcd_asic_pack_buf_to_stamps();
 }
 
 /* DIAGNOSTIC: write the centre 16x16 cells of g_web_buf DIRECTLY into the
