@@ -66,11 +66,14 @@ For a port of Tempest 2000 — a 60 Hz vector-3D shooter with full MOD-tracker m
 
 - **All 5 core enemies** from the Jaguar original: Flipper, Tanker (splits into 2 flippers), Pulsar (pulse-gated kill), Fuseball (erratic lane-hopper), Spiker + Spike obstacles
 - **Per-wave progression** — 16 waves, each with its own enemy quota and shape, then loops forever with escalating difficulty
-- **Superzapper power-up** — 1 charge per wave, clears every live enemy with a screen-flash + per-kill spark
+- **"WAVE N — GET READY" splash** between waves, freezing the action for ~1.5 s
+- **Bonus life every 4 waves** (capped at 9), celebrated with a "1UP!" on the splash
+- **Superzapper power-up** — 1 charge per wave; clears every live enemy with a screen-flash + per-kill spark + the Jag's own Crackle PCM
 - **Web shape rotation** — 8 shapes from the Jag (V, square, plus, triangle, pentagon, star, W, fan) extracted directly from `yak.s`
-- **3-life player loop** → game over → high-score persistence in HUD
+- **3-life player loop** → game over → back to title; START pauses
 - **Iconic fly-down-tube wave transition** rendered by the Mega CD ASIC
 - **MOD music** — separate title theme + 4 gameplay tracks (`rave4`, `tune7`, `tune5`, `tune12`) cycled per wave, matching the Jaguar's own `webtunes[]` set. Music keeps playing continuously through scene transitions.
+- **4 PCM SFX** — FIRE, HIT, DEATH, ZAP — all extracted from the Jaguar sample bank
 
 ---
 
