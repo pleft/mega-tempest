@@ -70,5 +70,5 @@ else:
     print('device flag already set')
 "
 
-cp "$ROM" "$HERE/../megacd-port.bin"
-echo "built: $HERE/../megacd-port.bin"
+cp "$ROM" "$HERE/../mega-tempest.bin"
+echo "built: $HERE/../mega-tempest.bin"

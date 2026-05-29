@@ -124,17 +124,17 @@ On-screen text (HUD, LOADING, GAME OVER, scene messages) renders in the Jaguar T
 
 ```sh
 ./build.sh            # docker-wrapped megadev toolchain;
-                      # outputs ../megacd-port.bin (~615 KB)
+                      # outputs ../mega-tempest.bin (~615 KB)
 ```
 
 Sub CPU module (`sub/spx.smd`) builds first, then the cart links the sub binary in via `.incbin`.
 
 ## Run
 
-Load `megacd-port.bin` in an emulator that supports Mega CD Mode 1 cart booting. **[ares](https://ares-emu.net/)** is recommended — accurate Sub CPU + Word RAM + ASIC. BlastEm has known quirks with Mode 1 Sub-CPU WR ownership.
+Load `mega-tempest.bin` in an emulator that supports Mega CD Mode 1 cart booting. **[ares](https://ares-emu.net/)** is recommended — accurate Sub CPU + Word RAM + ASIC. BlastEm has known quirks with Mode 1 Sub-CPU WR ownership.
 
 ```
-ares megacd-port.bin
+ares mega-tempest.bin
 ```
 
 On real hardware: flash to a flashcart that supports Mode 1, attach to a Mega CD, boot.
