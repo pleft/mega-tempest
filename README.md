@@ -6,6 +6,8 @@ No CD-ROM disc required. Just a Mega Drive + Mega CD attached.
 
 ![Gameplay screenshot — square web, blue palette, yellow claw](docs/screenshot.png)
 
+> **Status: v0.1-beta (work in progress).** Tested in [ares](https://ares-emu.net/); BlastEm has known Mode 1 quirks. Real-hardware validation is in progress — feedback and bug reports welcome. See [Known limitations](#known-limitations) below.
+
 ---
 
 ## Why Mode 1 cart?
@@ -76,6 +78,20 @@ For a port of Tempest 2000 — a 60 Hz vector-3D shooter with full MOD-tracker m
 - **Iconic fly-down-tube wave transition** rendered by the Mega CD ASIC
 - **MOD music** — separate title theme + 4 gameplay tracks (`rave4`, `tune7`, `tune5`, `tune12`) cycled per wave, matching the Jaguar's own `webtunes[]` set. Music keeps playing continuously through scene transitions.
 - **4 PCM SFX** — FIRE, HIT, DEATH, ZAP — all extracted from the Jaguar sample bank
+
+---
+
+## Known limitations
+
+This is a **v0.1-beta**. The core gameplay loop is complete and stable, but the following are known and intentional gaps:
+
+- **Loops at wave 16.** The Jag original has 99 levels with bonus stages and a warp mechanic between them. The port currently cycles the 16 wave definitions endlessly with escalating difficulty. Bonus stages + the level-99 victory + Beastly NG+ mode are scoped but not implemented.
+- **No high-score persistence.** No SRAM save yet.
+- **No options screen or level select.**
+- **Real-hardware validation in progress.** The port has been developed against [ares](https://ares-emu.net/), which models the Mega CD ASIC and Word RAM accurately. **BlastEm has known Mode 1 sub-CPU / Word-RAM issues** — graphics will glitch or hang. If you must use BlastEm, expect breakage.
+- **Tested with PAL TVs / 50 Hz timing**: only US/JP 60 Hz mode has been driven through the wave cycle. PAL should boot but level pacing is untested.
+
+Bug reports and feedback are very welcome.
 
 ---
 

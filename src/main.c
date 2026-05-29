@@ -115,7 +115,7 @@ static void clear_play_area(void)
     vdp_ctrl_32 = plane_xy(0, y);
     for (u8 x = 0; x < 40; ++x) vdp_data = ' ';
   }
-  /* Sparse star scatter at 1/4 density across the whole plane. */
+  /* Sparse star scatter at 1/8 density across the whole plane. */
   u32 r = 0xCAFEF00Du;
   for (u8 cy = 0; cy < 28; ++cy) {
     for (u8 cx = 0; cx < 40; ++cx) {
@@ -1266,6 +1266,8 @@ static void title_main_thread(void)
     /* "MEGA TEMPEST" is rendered on plane B via the ASIC engine — see
      * install_title for the bake and title_gated_vblank for the per-
      * frame zoom pulse. The plane-A print used to live here. */
+    /* Build / release tag in the lower-left corner. */
+    print("v0.1 BETA", plane_xy(2, 27));
     /* MCD presence readout tucked in the lower-right corner. */
     print("MCD:",         plane_xy(28, 27));
     print(g_mcd_present ? "PRESENT" : "ABSENT ", plane_xy(33, 27));
