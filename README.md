@@ -70,6 +70,7 @@ For a port of Tempest 2000 — a 60 Hz vector-3D shooter with full MOD-tracker m
 - **"WAVE N — GET READY" splash** between waves, freezing the action for ~1.5 s
 - **Bonus life every 4 waves** (capped at 9), celebrated with a "1UP!" on the splash
 - **Superzapper power-up** — 1 charge per wave; clears every live enemy with a screen-flash + per-kill spark + the Jag's own Crackle PCM
+- **LASER & JUMP power-ups** — dropped by killed tankers. LASER halves fire cooldown for 5 s; JUMP lifts the claw out of the lane for 1 s of invulnerability against rim deaths.
 - **Web shape rotation** — 8 shapes from the Jag (V, square, plus, triangle, pentagon, star, W, fan) extracted directly from `yak.s`
 - **3-life player loop** → game over → back to title; START pauses
 - **Iconic fly-down-tube wave transition** rendered by the Mega CD ASIC
