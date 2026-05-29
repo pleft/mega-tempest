@@ -341,16 +341,28 @@ static u16 g_splash_timer;
 static u8 g_bonus_life_pending;
 
 /* Power-ups — dropped by killed tankers, drift outward to the rim.
- * Collected when reaching the rim on the player's lane. Two kinds:
+ * Collected when reaching the rim on the player's lane.
  *   PUP_LASER → halves fire cooldown for LASER_FRAMES (~5 s).
  *   PUP_JUMP  → claw lifts above the rim, immune to rim deaths,
  *               for JUMP_FRAMES (~1 s).
- * g_pup_drop_count cycles through tanker kills so the kind alternates. */
+ *   PUP_LIFE  → +1 life (capped at 9), instant.
+ *   PUP_ZAP   → +1 superzapper charge (capped at 5), instant.
+ *   PUP_SKIP  → instant wave clear — triggers the zoom-out transition.
+ * g_pup_drop_count cycles through kinds on every tanker kill. */
 #define PUP_LASER     0
 #define PUP_JUMP      1
+#define PUP_LIFE      2
+#define PUP_ZAP       3
+#define PUP_SKIP      4
+#define PUP_DROID     5
+#define PUP_KIND_COUNT 6
 #define PUP_OUT_STEP  (FP_ONE >> 9)    /* ~8 s to drift the lane — slow enough to chase */
 #define LASER_FRAMES  300              /* ~5 s of fast fire */
 #define JUMP_FRAMES   60               /* ~1 s of claw lift + invulnerability */
+#define SZ_CAP        5                /* stack up to 5 superzapper charges */
+#define DROID_LIFE_FRAMES   1200       /* ~20 s before AI droid expires */
+#define DROID_HOP_PERIOD    8          /* ticks between droid lane hops */
+#define DROID_FIRE_MASK     0x17       /* fire every (mask+1) frames ≈ 24 */
 static u16 g_laser_timer;
 u16        g_jump_timer;    /* non-static: web.c reads it for claw-lift */
 static u8  g_pup_drop_count;
@@ -522,6 +534,25 @@ static void spawn_spiker(u8 lane)
   g_enemy_count++;
 }
 
+/* AI droid: spawned by PUP_DROID. Walks the rim toward the nearest
+ * enemy + fires shots periodically. Lifetime tracked via a sibling u16
+ * counter (g_droid_lifetime — Entity.lifetime is u8 and we want > 4 s). */
+static u16 g_droid_lifetime;     /* > 0 = droid alive; frames remaining */
+
+static void spawn_droid(u8 lane)
+{
+  Entity * e = entity_spawn();
+  if (!e) return;
+  e->type         = E_DROID;
+  e->lane         = lane;
+  e->depth_fp     = FP_ONE;
+  e->depth_vel_fp = 0;
+  e->phase        = 0;
+  e->step_period  = DROID_HOP_PERIOD;
+  e->lifetime     = 0;
+  g_droid_lifetime = DROID_LIFE_FRAMES;
+}
+
 /* Spawn a power-up that drifts outward to the rim. `kind` is PUP_LASER
  * or PUP_JUMP. Not an enemy — doesn't count against g_enemy_count. */
 static void spawn_powerup(u8 lane, fp16 depth, u8 kind)
@@ -686,10 +717,11 @@ static void split_tanker(Entity * t)
   fp16 depth = t->depth_fp;
   spawn_flipper_at(web_lane_left(lane),  depth);
   spawn_flipper_at(web_lane_right(lane), depth);
-  /* Drop a power-up at the tanker's lane. Kind alternates per tanker
-   * killed so the player sees both types over time. */
-  u8 kind = (u8) (g_pup_drop_count & 1);
-  g_pup_drop_count++;
+  /* Drop a power-up at the tanker's lane. Kind cycles through all 5
+   * types per tanker killed so the player sees each type over time. */
+  u8 kind = g_pup_drop_count;
+  while (kind >= PUP_KIND_COUNT) kind = (u8) (kind - PUP_KIND_COUNT);
+  g_pup_drop_count = (u8) (g_pup_drop_count + 1);
   spawn_powerup(lane, depth, kind);
   g_enemy_count--;        /* the tanker itself */
   entity_kill(t);
@@ -1011,6 +1043,30 @@ static void play_gated_vblank(void)
       /* Stationary; just count down to despawn. */
       if (e->lifetime) e->lifetime--;
       if (e->lifetime == 0) entity_kill(e);
+    } else if (e->type == E_DROID) {
+      /* Find the nearest enemy (highest depth_fp) and walk toward its
+       * lane. Fire periodically. Despawn when g_droid_lifetime expires. */
+      if (g_droid_lifetime == 0) { entity_kill(e); e = next; continue; }
+      g_droid_lifetime--;
+      u8   target_lane = e->lane;
+      fp16 best_depth  = -1;
+      for (Entity * en = g_active_head; en; en = en->next) {
+        if (en->type == E_FLIPPER || en->type == E_TANKER ||
+            en->type == E_PULSAR  || en->type == E_FUSEBALL ||
+            en->type == E_SPIKER) {
+          if (en->depth_fp > best_depth) {
+            best_depth  = en->depth_fp;
+            target_lane = en->lane;
+          }
+        }
+      }
+      if (e->step_period) e->step_period--;
+      if (e->step_period == 0) {
+        if      (target_lane < e->lane) e->lane = web_lane_left(e->lane);
+        else if (target_lane > e->lane) e->lane = web_lane_right(e->lane);
+        e->step_period = DROID_HOP_PERIOD;
+      }
+      if ((g_anim_frame & DROID_FIRE_MASK) == 0) spawn_shot(e->lane);
     } else if (e->type == E_POWERUP) {
       /* Drift outward toward the rim. On reaching it, check if the
        * player is on the same lane → collect + activate. Otherwise
@@ -1018,8 +1074,16 @@ static void play_gated_vblank(void)
       e->depth_fp += e->depth_vel_fp;
       if (e->depth_fp >= FP_ONE) {
         if (e->lane == g_player_lane && g_respawn_timer == 0) {
-          if (e->phase == PUP_LASER) g_laser_timer = LASER_FRAMES;
-          else                       g_jump_timer  = JUMP_FRAMES;
+          switch (e->phase) {
+            case PUP_LASER: g_laser_timer = LASER_FRAMES;              break;
+            case PUP_JUMP:  g_jump_timer  = JUMP_FRAMES;               break;
+            case PUP_LIFE:  if (g_lives < 9) g_lives++;                break;
+            case PUP_ZAP:   if (g_superzapper_charges < SZ_CAP)
+                                g_superzapper_charges++;               break;
+            case PUP_SKIP:  if (g_zoom_out_frame == 0)
+                                g_zoom_out_frame = 1;                  break;
+            case PUP_DROID: spawn_droid(g_player_lane);                break;
+          }
           g_score += 5;
           if (g_mcd_present) mcd_play_sfx(1);    /* re-use HIT cue */
           else               sfx_hit();
@@ -1321,12 +1385,6 @@ static void play_main_thread(void)
    * zoom start; re-rendering would re-show the (frozen) claw. */
   if (g_zoom_out_frame == 0) render_sprites();
 
-  /* C button — debug: force the wave transition right now (zoom + bake
-   * next wave). Useful for iterating on the ASIC zoom effect without
-   * having to clear a wave normally. */
-  if ((p1_single & PAD_C) && g_zoom_out_frame == 0 && g_respawn_timer == 0) {
-    g_zoom_out_frame = 1;
-  }
 }
 
 // ---- Scene: GAME OVER -----------------------------------------------------

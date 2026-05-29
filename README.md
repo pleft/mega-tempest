@@ -70,7 +70,7 @@ For a port of Tempest 2000 — a 60 Hz vector-3D shooter with full MOD-tracker m
 - **"WAVE N — GET READY" splash** between waves, freezing the action for ~1.5 s
 - **Bonus life every 4 waves** (capped at 9), celebrated with a "1UP!" on the splash
 - **Superzapper power-up** — 1 charge per wave; clears every live enemy with a screen-flash + per-kill spark + the Jag's own Crackle PCM
-- **LASER & JUMP power-ups** — dropped by killed tankers. LASER halves fire cooldown for 5 s; JUMP lifts the claw out of the lane for 1 s of invulnerability against rim deaths.
+- **Six power-ups** — dropped by killed tankers: LASER (rapid fire), JUMP (immune to rim deaths), extra life, extra superzapper charge, wave-skip, and an AI droid sidekick that walks the rim and fires at the nearest enemy
 - **Web shape rotation** — 8 shapes from the Jag (V, square, plus, triangle, pentagon, star, W, fan) extracted directly from `yak.s`
 - **3-life player loop** → game over → back to title; START pauses
 - **Iconic fly-down-tube wave transition** rendered by the Mega CD ASIC
@@ -130,8 +130,20 @@ On real hardware: flash to a flashcart that supports Mode 1, attach to a Mega CD
 | **D-pad ◀ ▶** | — | walk lanes | — |
 | **A** | — | fire | — |
 | **B** | — | superzapper (1 charge per wave) | — |
-| **C** | — | (debug) force wave transition | — |
 | **START** | begin play | **pause / resume** | back to title |
+
+### Power-ups
+
+Killed tankers drop a glyph that drifts to the rim — grab it by being on the same lane:
+
+| Glyph | Effect |
+|-------|--------|
+| **L** | LASER — rapid fire for 5 s |
+| **J** | JUMP — claw lifts above the lane, immune to rim deaths for 1 s |
+| **1** | extra life (+1, capped at 9) |
+| **Z** | extra superzapper charge (+1, capped at 5) |
+| **S** | force the wave-end transition (instant skip to next wave) |
+| **D** | AI droid sidekick — walks the rim and fires at the nearest enemy for ~20 s |
 
 ---
 

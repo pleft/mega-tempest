@@ -956,17 +956,28 @@ void render_sprites(void)
     emit_sprite_depth(spr_buf, n++, &SHOT_SIZE, px, py, g_spike_depth[k]);
   }
 
-  /* Pass 8.5: POWER-UPS — drifting "L" or "J" glyphs that the player
-   * collects at the rim. Phase = PUP_LASER (0) → 'L', PUP_JUMP (1) → 'J'.
-   * Font tiles live in VRAM starting at tile 0x20 (the font DMA at boot)
-   * so the glyph index is 0x20 + (char - 0x20) = the ASCII code. */
+  /* Pass 8.5: POWER-UPS — drifting glyphs the player collects at the rim.
+   *   PUP_LASER → 'L', PUP_JUMP → 'J', PUP_LIFE → '1',
+   *   PUP_ZAP   → 'Z', PUP_SKIP → 'S', PUP_DROID → 'D'.
+   * Font tiles live in VRAM starting at tile 0x20 (the font DMA at
+   * boot) so the glyph index is just the ASCII code. */
+  static const char PUP_GLYPH[6] = { 'L', 'J', '1', 'Z', 'S', 'D' };
   for (Entity * e = g_active_head; e; e = e->next) {
     if (e->type != E_POWERUP || n >= SPR_MAX) continue;
     s16 px = web_pixel_x(e->lane, e->depth_fp);
     s16 py = web_pixel_y(e->lane, e->depth_fp);
-    u16 glyph = (e->phase == 0) ? 'L' : 'J';
-    SpriteSizeDef sz = { SPR_SIZE_1x1, glyph, 4 };
+    u8  k  = (e->phase < 6) ? e->phase : 0;
+    SpriteSizeDef sz = { SPR_SIZE_1x1, (u16) PUP_GLYPH[k], 4 };
     emit_sprite_depth(spr_buf, n++, &sz, px, py, e->depth_fp);
+  }
+
+  /* Pass 8.6: AI DROID — single sidekick at the rim, glyph 'D'. */
+  for (Entity * e = g_active_head; e; e = e->next) {
+    if (e->type != E_DROID || n >= SPR_MAX) continue;
+    s16 px = web_pixel_x(e->lane, FP_ONE);
+    s16 py = web_pixel_y(e->lane, FP_ONE);
+    SpriteSizeDef sz = { SPR_SIZE_1x1, (u16) 'D', 4 };
+    emit_sprite_depth(spr_buf, n++, &sz, px, py, FP_ONE);
   }
 
   /* Pass 9: ZAPSPARKS — superzapper kill markers. Stationary white dots

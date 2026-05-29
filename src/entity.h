@@ -46,7 +46,16 @@ typedef enum {
                     // rim like a flipper. Player collects by being on the
                     // same lane when it arrives. Field reuse:
                     //   lane, depth_fp, depth_vel_fp     — standard
-                    //   phase (0=LASER, 1=JUMP)          — power-up kind
+                    //   phase (0=LASER, 1=JUMP, ...)     — power-up kind
+  E_DROID    = 11,  // AI sidekick spawned by PUP_DROID. Walks the rim
+                    // toward the nearest enemy's lane and fires shots
+                    // periodically. Field reuse:
+                    //   lane           = current rim lane
+                    //   depth_fp       = FP_ONE (always at rim)
+                    //   step_period    = ticks until next lane hop
+                    //   lifetime       = u8 — wraps; combined with a u16
+                    //                    g_droid_life_timer for the real
+                    //                    countdown (~20 s).
 } EntityType;
 
 struct Entity {
