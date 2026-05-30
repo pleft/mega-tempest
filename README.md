@@ -6,7 +6,7 @@ No CD-ROM disc required. Just a Mega Drive + Mega CD attached.
 
 ![Gameplay screenshot — square web, blue palette, yellow claw](docs/screenshot.png)
 
-> **Status: v0.1-beta (work in progress).** Tested in [ares](https://ares-emu.net/); BlastEm has known Mode 1 quirks. Real-hardware validation is in progress — feedback and bug reports welcome. See [Known limitations](#known-limitations) below.
+> **Status: v0.1-beta (work in progress).** Verified working on **real Mega Drive + Mega CD hardware** (2026-05-30) and in [ares](https://ares-emu.net/); BlastEm has known Mode 1 quirks. Feedback and bug reports welcome. See [Known limitations](#known-limitations) below.
 
 ---
 
@@ -88,7 +88,8 @@ This is a **v0.1-beta**. The core gameplay loop is complete and stable, but the 
 - **Loops at wave 16.** The Jag original has 99 levels with bonus stages and a warp mechanic between them. The port currently cycles the 16 wave definitions endlessly with escalating difficulty. Bonus stages + the level-99 victory + Beastly NG+ mode are scoped but not implemented.
 - **No high-score persistence.** No SRAM save yet.
 - **No options screen or level select.**
-- **Real-hardware validation in progress.** The port has been developed against [ares](https://ares-emu.net/), which models the Mega CD ASIC and Word RAM accurately. **BlastEm has known Mode 1 sub-CPU / Word-RAM issues** — graphics will glitch or hang. If you must use BlastEm, expect breakage.
+- **Real-hardware behaviour.** Verified booting + playing end-to-end on real Mega Drive + Mega CD as of 2026-05-30. **One known hardware-only audio issue**: a faint echo on some `rave4.mod` samples that does not reproduce in ares — suspected PCM-RAM allocation overlap with SFX, pending fix.
+- **Emulator support.** Developed against [ares](https://ares-emu.net/), which models the Mega CD ASIC and Word RAM accurately. **BlastEm has known Mode 1 sub-CPU / Word-RAM issues** — graphics will glitch or hang.
 - **Tested with PAL TVs / 50 Hz timing**: only US/JP 60 Hz mode has been driven through the wave cycle. PAL should boot but level pacing is untested.
 
 Bug reports and feedback are very welcome.
