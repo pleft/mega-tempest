@@ -246,10 +246,35 @@ static void stream_tick_channel(uint8_t channel)
   if (!c->active) return;
   if (c->period < 4) return;
 
-  /* End of source — write $FF at ring start so chip silences here. */
+  /* End of source — silence the rest of the ring so the chip stops
+   * cleanly instead of replaying stale bytes from earlier passes of
+   * the same sample. (The streaming write pointer only fills a slice
+   * of the ring each tick; anything beyond c->ring_pos is leftover
+   * from when the ring wrapped earlier, which on real silicon
+   * audibly echoes the start of the sample. ares masks this — see
+   * feedback_pcm_mod_sample_collision + chip_quirks_real_hw_check.)
+   *
+   * Fill from the last write position out to STREAM_USABLE_SIZE with
+   * $FF so the chip hits end-of-sample as soon as it crosses our
+   * stop point; then write $FF at ring[0] so the chip's loop wrap
+   * (loop_start = ring_base) immediately re-triggers end-of-sample
+   * and the channel stays silent. */
   if (c->src_pos >= c->src_len) {
     if (!c->eos) {
       uint16_t ring_base = channel_ring_offset(channel);
+      static uint8_t ff_buf[64];
+      static uint8_t ff_init = 0;
+      if (!ff_init) {
+        for (uint16_t i = 0; i < 64; i++) ff_buf[i] = 0xFF;
+        ff_init = 1;
+      }
+      uint16_t pos = c->ring_pos;
+      while (pos < STREAM_USABLE_SIZE) {
+        uint16_t chunk = (uint16_t) (STREAM_USABLE_SIZE - pos);
+        if (chunk > 64) chunk = 64;
+        pcm_cpy(ring_base + pos, ff_buf, chunk, 0);
+        pos += chunk;
+      }
       static const uint8_t stop_byte = 0xFF;
       pcm_cpy(ring_base + 0, (void *) &stop_byte, 1, 0);
       c->eos = 1;
