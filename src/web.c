@@ -834,6 +834,22 @@ static inline void emit_sprite_depth(u16 * buf, u8 idx, const SpriteSizeDef * sz
   buf[idx * 4 + 3] = (u16) (px + 128 - sz->half);                     /* X */
 }
 
+/* Same as emit_sprite_depth but ORs `pal_bits` into the tile-attribute
+ * word — used to render enemy variants (super flipper, pulsar-tanker,
+ * fuse-tanker) through a different VDP sprite palette.
+ *   pal_bits = 0x0000 → palette 0 (default — same as emit_sprite_depth)
+ *   pal_bits = 0x2000 → palette 1 (white super flipper, cyan pulsar tanker)
+ *   pal_bits = 0x4000 → palette 2 (green fuse tanker) */
+static inline void emit_sprite_depth_pal(u16 * buf, u8 idx, const SpriteSizeDef * sz,
+                                         s16 px, s16 py, fp16 depth_fp, u16 pal_bits)
+{
+  (void) depth_fp;
+  buf[idx * 4 + 0] = (u16) (py + 128 - sz->half);
+  buf[idx * 4 + 1] = (u16) (((u16) sz->size_byte << 8) | (idx + 1));
+  buf[idx * 4 + 2] = (u16) (0x8000 | pal_bits | sz->tile_base);
+  buf[idx * 4 + 3] = (u16) (px + 128 - sz->half);
+}
+
 void render_sprites(void)
 {
   static u16 spr_buf[SPR_MAX * 4];
@@ -874,7 +890,8 @@ void render_sprites(void)
   extern u8 g_anim_frame;
   u8 const frame = (u8) ((g_anim_frame >> 3) & 0x03);
   for (Entity * e = g_active_head; e; e = e->next) {
-    if (e->type != E_FLIPPER || n >= SPR_MAX) continue;
+    if ((e->type != E_FLIPPER && e->type != E_SUPER_FLIPPER) ||
+        n >= SPR_MAX) continue;
     s16 px = web_pixel_x(e->lane, e->depth_fp);
     s16 py = web_pixel_y(e->lane, e->depth_fp);
     u8 tier = (e->depth_fp < 0x5555) ? 0
@@ -882,10 +899,17 @@ void render_sprites(void)
     SpriteSizeDef sz = { SPR_SIZE_1x1,
                          (u16) (FLIPPER_TILE_BASE + tier * 4 + frame),
                          4 };
-    emit_sprite_depth(spr_buf, n++, &sz, px, py, e->depth_fp);
+    /* Super flippers render through palette 1 → white instead of red,
+     * via cram[16+2] set in main.c init. */
+    u16 pal_bits = (e->type == E_SUPER_FLIPPER) ? (u16) 0x2000 : (u16) 0;
+    emit_sprite_depth_pal(spr_buf, n++, &sz, px, py, e->depth_fp, pal_bits);
   }
 
-  /* Pass 4: TANKERS — 3 depth tiers × 1 frame, all 1x1. No rotation. */
+  /* Pass 4: TANKERS — 3 depth tiers × 1 frame, all 1x1. No rotation.
+   * Per-variant palette select (cram entries 16+3 / 32+3 set in main.c):
+   *   kind 0 (flipper-tanker) → palette 0, pink (cram[3])
+   *   kind 1 (pulsar-tanker)  → palette 1, cyan (cram[16+3])
+   *   kind 2 (fuse-tanker)    → palette 2, green (cram[32+3]) */
   for (Entity * e = g_active_head; e; e = e->next) {
     if (e->type != E_TANKER || n >= SPR_MAX) continue;
     s16 px = web_pixel_x(e->lane, e->depth_fp);
@@ -895,7 +919,10 @@ void render_sprites(void)
     SpriteSizeDef sz = { SPR_SIZE_1x1,
                          (u16) (TANKER_TILE_BASE + tier),
                          4 };
-    emit_sprite_depth(spr_buf, n++, &sz, px, py, e->depth_fp);
+    u16 pal_bits = (e->step_period == 1) ? (u16) 0x2000
+                 : (e->step_period == 2) ? (u16) 0x4000
+                 : (u16) 0;
+    emit_sprite_depth_pal(spr_buf, n++, &sz, px, py, e->depth_fp, pal_bits);
   }
 
   /* Pass 5: PULSARS — 3 depth tiers × 3 frames; all pulsars in sync.

@@ -21,11 +21,16 @@ typedef enum {
                     //   depth_fp     = accumulated screen-x offset from spawn
                     //   depth_vel_fp = accumulated screen-y offset from spawn
                     //   lifetime     = frames remaining (auto-kill at 0)
-  E_TANKER  = 5,    // big slow enemy; splits into 2 flippers on hit.
-                    // Same field semantics as E_FLIPPER (lane, phase,
-                    // depth_fp, depth_vel_fp). Tankers don't rim-walk —
-                    // they sit at the rim on reaching it and kill the
-                    // player when the claw passes through that lane.
+  E_TANKER  = 5,    // big slow enemy; splits on hit. Field reuse:
+                    //   lane, phase, depth_fp, depth_vel_fp — same as
+                    //     E_FLIPPER (phase 0=desc / 1=rim).
+                    //   step_period = tanker kind (0=flipper-tanker
+                    //     → 2 flippers; 1=pulsar-tanker → 2 pulsars;
+                    //     2=fuse-tanker → 2 fuseballs).
+                    //   Render pass picks the sprite palette by kind
+                    //     so the variants are colour-coded.
+                    //   Tankers don't rim-walk — they sit at the rim
+                    //   on reaching it and kill the player on contact.
   E_PULSAR  = 6,    // descends, cycles 3-frame pulse animation (driven
                     // by g_anim_frame). When pulse hits peak (frame 2)
                     // and pulsar is at the rim on the player's lane,
@@ -56,6 +61,12 @@ typedef enum {
                     //   lifetime       = u8 — wraps; combined with a u16
                     //                    g_droid_life_timer for the real
                     //                    countdown (~20 s).
+  E_SUPER_FLIPPER = 12,  // promoted flipper variant — same descent +
+                    // rim-walk behaviour as E_FLIPPER but ~1.5× faster
+                    // and rendered in white (per-sprite palette 1 slot
+                    // 2). Spawned probabilistically from the flipper
+                    // pool from wave 6+. Same field semantics as
+                    // E_FLIPPER throughout the tick + collision paths.
 } EntityType;
 
 struct Entity {

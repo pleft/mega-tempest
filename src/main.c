@@ -478,7 +478,32 @@ static Entity * spawn_flipper_at(u8 lane, fp16 depth_fp)
 
 static void spawn_flipper(u8 lane) { (void) spawn_flipper_at(lane, 0); }
 
-static void spawn_tanker(u8 lane)
+/* Super flipper — faster flipper variant (v0.2). Same tick + collision
+ * code paths as regular flipper but ~50% faster descent and rim-walk.
+ * Rendered with per-sprite palette select 1 → white body. */
+static Entity * spawn_super_flipper_at(u8 lane, fp16 depth_fp)
+{
+  Entity * e = entity_spawn();
+  if (!e) return 0;
+  e->type         = E_SUPER_FLIPPER;
+  e->lane         = lane;
+  e->depth_fp     = depth_fp;
+  e->depth_vel_fp = (fp16) (FLIPPER_OUT_STEP + (FLIPPER_OUT_STEP >> 1));
+  e->phase        = (depth_fp >= FP_ONE) ? 1 : 0;
+  e->step_period  = (u8) (FLIPPER_RIM_HOP - 4);
+  e->lifetime     = (u8) (FLIPPER_RIM_HOP - 4);
+  g_enemy_count++;
+  return e;
+}
+static void spawn_super_flipper(u8 lane) { (void) spawn_super_flipper_at(lane, 0); }
+
+/* Tanker variant kinds — stored in e->step_period (unused by tanker
+ * tick code). The render pass picks per-sprite palette by this kind. */
+#define TANKER_KIND_FLIPPER  0   /* default: splits into 2 flippers — pink */
+#define TANKER_KIND_PULSAR   1   /* splits into 2 pulsars         — cyan  */
+#define TANKER_KIND_FUSE     2   /* splits into 2 fuseballs       — green */
+
+static void spawn_tanker_kind(u8 lane, u8 kind)
 {
   Entity * e = entity_spawn();
   if (!e) return;
@@ -487,38 +512,44 @@ static void spawn_tanker(u8 lane)
   e->depth_fp     = 0;
   e->depth_vel_fp = +TANKER_OUT_STEP;
   e->phase        = 0;
-  e->step_period  = 0;
+  e->step_period  = kind;
   e->lifetime     = 0;
   g_enemy_count++;
 }
 
-static void spawn_pulsar(u8 lane)
+static void spawn_tanker(u8 lane) { spawn_tanker_kind(lane, TANKER_KIND_FLIPPER); }
+
+static void spawn_pulsar_at(u8 lane, fp16 depth_fp)
 {
   Entity * e = entity_spawn();
   if (!e) return;
   e->type         = E_PULSAR;
   e->lane         = lane;
-  e->depth_fp     = 0;
+  e->depth_fp     = depth_fp;
   e->depth_vel_fp = +PULSAR_OUT_STEP;
-  e->phase        = 0;
+  e->phase        = (depth_fp >= FP_ONE) ? 1 : 0;
   e->step_period  = 0;
   e->lifetime     = 0;
   g_enemy_count++;
 }
 
-static void spawn_fuseball(u8 lane)
+static void spawn_pulsar(u8 lane) { spawn_pulsar_at(lane, 0); }
+
+static void spawn_fuseball_at(u8 lane, fp16 depth_fp)
 {
   Entity * e = entity_spawn();
   if (!e) return;
   e->type         = E_FUSEBALL;
   e->lane         = lane;
-  e->depth_fp     = 0;
+  e->depth_fp     = depth_fp;
   e->depth_vel_fp = +FUSEBALL_STEP;
-  e->phase        = 0;
+  e->phase        = (depth_fp >= FP_ONE) ? 1 : 0;
   e->step_period  = 0;
   e->lifetime     = FUSEBALL_HOP_PERIOD;
   g_enemy_count++;
 }
+
+static void spawn_fuseball(u8 lane) { spawn_fuseball_at(lane, 0); }
 
 static void spawn_spiker(u8 lane)
 {
@@ -532,6 +563,35 @@ static void spawn_spiker(u8 lane)
   e->step_period  = 0;
   e->lifetime     = 0;
   g_enemy_count++;
+}
+
+/* Wave-aware pickers — called from the pool dispatch. Decide whether a
+ * flipper / tanker spawn becomes a variant based on g_wave_num.
+ *
+ * Super flippers: from wave 6+ (g_wave_num >= 5) roughly 1/4 of flipper
+ *   spawns are promoted to E_SUPER_FLIPPER.
+ * Tanker kinds: from wave 7+ (g_wave_num >= 6) tanker spawns mix
+ *   flipper-tanker + fuse-tanker; from wave 9+ all three kinds are in
+ *   the rotation (flipper / pulsar / fuse). */
+static void spawn_flipper_picked(u8 lane)
+{
+  if (g_wave_num >= 5 && (lcg() & 0x03) == 0) spawn_super_flipper(lane);
+  else                                         spawn_flipper(lane);
+}
+
+static void spawn_tanker_picked(u8 lane)
+{
+  u8 kind;
+  if (g_wave_num >= 8) {
+    u8 r = (u8) (lcg() & 0x03);   /* 0..3; treat 3 as a re-roll to 0 */
+    if (r == 3) r = 0;
+    kind = r;                      /* 0=flipper, 1=pulsar, 2=fuse */
+  } else if (g_wave_num >= 6) {
+    kind = (lcg() & 0x01) ? TANKER_KIND_FUSE : TANKER_KIND_FLIPPER;
+  } else {
+    kind = TANKER_KIND_FLIPPER;
+  }
+  spawn_tanker_kind(lane, kind);
 }
 
 /* AI droid: spawned by PUP_DROID. Walks the rim toward the nearest
@@ -579,9 +639,9 @@ static void trigger_superzapper(void)
   Entity * e = g_active_head;
   while (e) {
     Entity * next = e->next;
-    if (e->type == E_FLIPPER || e->type == E_TANKER ||
-        e->type == E_PULSAR  || e->type == E_FUSEBALL ||
-        e->type == E_SPIKER) {
+    if (e->type == E_FLIPPER || e->type == E_SUPER_FLIPPER ||
+        e->type == E_TANKER  || e->type == E_PULSAR  ||
+        e->type == E_FUSEBALL || e->type == E_SPIKER) {
       /* Spawn a zapspark at this enemy's lane+depth before killing. */
       Entity * s = entity_spawn();
       if (s) {
@@ -652,9 +712,10 @@ static void next_wave(void)
   Entity * e = g_active_head;
   while (e) {
     Entity * next = e->next;
-    if (e->type == E_FLIPPER || e->type == E_TANKER ||
-        e->type == E_PULSAR  || e->type == E_FUSEBALL ||
-        e->type == E_SPIKER  || e->type == E_DEBRIS) {
+    if (e->type == E_FLIPPER || e->type == E_SUPER_FLIPPER ||
+        e->type == E_TANKER  || e->type == E_PULSAR  ||
+        e->type == E_FUSEBALL || e->type == E_SPIKER  ||
+        e->type == E_DEBRIS) {
       entity_kill(e);
     }
     e = next;
@@ -709,15 +770,32 @@ static void next_wave(void)
   g_scene_dirty = 1;       /* repaint HUD next frame */
 }
 
-/* Shot hit a tanker — spawn 2 flippers on adjacent lanes at the tanker's
- * current depth and kill the tanker. */
+/* Shot hit a tanker — spawn 2 enemies on adjacent lanes at the tanker's
+ * current depth and kill the tanker. What spawns depends on the tanker's
+ * kind (stored in step_period): flippers / pulsars / fuseballs. */
 static void split_tanker(Entity * t)
 {
-  u8   lane  = t->lane;
-  fp16 depth = t->depth_fp;
-  spawn_flipper_at(web_lane_left(lane),  depth);
-  spawn_flipper_at(web_lane_right(lane), depth);
-  /* Drop a power-up at the tanker's lane. Kind cycles through all 5
+  u8   lane    = t->lane;
+  fp16 depth   = t->depth_fp;
+  u8   t_kind  = t->step_period;
+  u8   l_lane  = web_lane_left(lane);
+  u8   r_lane  = web_lane_right(lane);
+  switch (t_kind) {
+    case TANKER_KIND_PULSAR:
+      spawn_pulsar_at(l_lane, depth);
+      spawn_pulsar_at(r_lane, depth);
+      break;
+    case TANKER_KIND_FUSE:
+      spawn_fuseball_at(l_lane, depth);
+      spawn_fuseball_at(r_lane, depth);
+      break;
+    case TANKER_KIND_FLIPPER:
+    default:
+      spawn_flipper_at(l_lane, depth);
+      spawn_flipper_at(r_lane, depth);
+      break;
+  }
+  /* Drop a power-up at the tanker's lane. Kind cycles through all 6
    * types per tanker killed so the player sees each type over time. */
   u8 kind = g_pup_drop_count;
   while (kind >= PUP_KIND_COUNT) kind = (u8) (kind - PUP_KIND_COUNT);
@@ -942,8 +1020,8 @@ static void play_gated_vblank(void)
       if (g_pool[slot] == 0) continue;
       g_pool[slot]--;
       switch (slot) {
-        case POOL_FLIPPER:  spawn_flipper(lane);  break;
-        case POOL_TANKER:   spawn_tanker(lane);   break;
+        case POOL_FLIPPER:  spawn_flipper_picked(lane);  break;
+        case POOL_TANKER:   spawn_tanker_picked(lane);   break;
         case POOL_PULSAR:   spawn_pulsar(lane);   break;
         case POOL_FUSEBALL: spawn_fuseball(lane); break;
         case POOL_SPIKER:   spawn_spiker(lane);   break;
@@ -960,7 +1038,7 @@ static void play_gated_vblank(void)
     if (e->type == E_SHOT) {
       e->depth_fp += e->depth_vel_fp;
       if (e->depth_fp <= 0) entity_kill(e);
-    } else if (e->type == E_FLIPPER) {
+    } else if (e->type == E_FLIPPER || e->type == E_SUPER_FLIPPER) {
       if (e->phase == 0) {
         e->depth_fp += e->depth_vel_fp;
         if (e->depth_fp >= FP_ONE) {
@@ -1051,9 +1129,9 @@ static void play_gated_vblank(void)
       u8   target_lane = e->lane;
       fp16 best_depth  = -1;
       for (Entity * en = g_active_head; en; en = en->next) {
-        if (en->type == E_FLIPPER || en->type == E_TANKER ||
-            en->type == E_PULSAR  || en->type == E_FUSEBALL ||
-            en->type == E_SPIKER) {
+        if (en->type == E_FLIPPER || en->type == E_SUPER_FLIPPER ||
+            en->type == E_TANKER  || en->type == E_PULSAR  ||
+            en->type == E_FUSEBALL || en->type == E_SPIKER) {
           if (en->depth_fp > best_depth) {
             best_depth  = en->depth_fp;
             target_lane = en->lane;
@@ -1103,19 +1181,20 @@ static void play_gated_vblank(void)
       Entity * f = g_active_head;
       while (f) {
         Entity * f_next = f->next;
-        if ((f->type == E_FLIPPER || f->type == E_TANKER ||
-             f->type == E_PULSAR  || f->type == E_FUSEBALL ||
-             f->type == E_SPIKER)
+        if ((f->type == E_FLIPPER || f->type == E_SUPER_FLIPPER ||
+             f->type == E_TANKER  || f->type == E_PULSAR  ||
+             f->type == E_FUSEBALL || f->type == E_SPIKER)
             && f->lane == s->lane) {
           fp16 d = s->depth_fp - f->depth_fp;
           if (d < 0) d = -d;
           if (d <= HIT_DEPTH_TOL) {
             entity_kill(s);
-            if      (f->type == E_TANKER)   { split_tanker(f); g_score += 2; }
-            else if (f->type == E_PULSAR)   { kill_enemy(f);   g_score += 3; }
-            else if (f->type == E_FUSEBALL) { kill_enemy(f);   g_score += 4; }
-            else if (f->type == E_SPIKER)   { kill_enemy(f);   g_score += 2; }
-            else                            { kill_enemy(f);   g_score++;    }
+            if      (f->type == E_TANKER)        { split_tanker(f); g_score += 2; }
+            else if (f->type == E_PULSAR)        { kill_enemy(f);   g_score += 3; }
+            else if (f->type == E_FUSEBALL)      { kill_enemy(f);   g_score += 4; }
+            else if (f->type == E_SPIKER)        { kill_enemy(f);   g_score += 2; }
+            else if (f->type == E_SUPER_FLIPPER) { kill_enemy(f);   g_score += 2; }
+            else                                 { kill_enemy(f);   g_score++;    }
             if (g_mcd_present) mcd_play_sfx(1);    /* 1 = HIT — PCM */
             else               sfx_hit();           /* PSG fallback */
             break;
@@ -1178,7 +1257,8 @@ static void play_gated_vblank(void)
        * 4-step ping-pong animation (PULSAR_FRAME_MAP[2] = 2). */
       u8 const pulse_step = (u8) ((g_anim_frame >> 4) & 0x3);
       u8 const pulse_peak = (pulse_step == 2);
-      if (((f->type == E_FLIPPER || f->type == E_TANKER || f->type == E_FUSEBALL) ||
+      if (((f->type == E_FLIPPER || f->type == E_SUPER_FLIPPER ||
+            f->type == E_TANKER  || f->type == E_FUSEBALL) ||
            (f->type == E_PULSAR && pulse_peak)) &&
           f->phase == 1 && f->lane == g_player_lane) {
         /* Snapshot claw's outer-rim screen position — the burst origin. */
@@ -1473,6 +1553,21 @@ void main(void)
   cram[13] = 0x0C00;          // 13 web fill band 5
   cram[14] = 0x0E00;          // 14 web fill band 6 — bright blue
   cram[15] = 0x0E00;          // 15 web fill band 7 — pure blue, outline (0x0E80) pops above it
+
+  /* Per-sprite palette variants for enemy sub-types (v0.2). Same tile
+   * bytes render in different colours when the sprite-attribute palette
+   * select (bits 13-14 of word 2) picks palette 1 or 2 instead of 0.
+   *
+   * Palette 1 (CRAM 16..31): cyan at slot 3 (pulsar-tanker, tile uses
+   *   palette index 3 = same as flipper-tanker) and white at slot 2
+   *   (super-flipper, flipper tile uses palette index 2 = red in pal 0).
+   * Palette 2 (CRAM 32..47): green at slot 3 (fuse-tanker).
+   *
+   * Other slots in palettes 1/2 stay zero (transparent) — only the
+   * sub-types' body colours need to be set. */
+  cram[16 + 2] = 0x0EEE;       /* pal 1 slot 2 = white  (super flipper) */
+  cram[16 + 3] = 0x0EE0;       /* pal 1 slot 3 = cyan   (pulsar tanker) */
+  cram[32 + 3] = 0x00E0;       /* pal 2 slot 3 = green  (fuse  tanker)  */
   update_cram();
 
   init_joypads();
