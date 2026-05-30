@@ -4,7 +4,9 @@ A from-scratch port of Atari Jaguar's **Tempest 2000** (Llamasoft / Atari, 1994)
 
 No CD-ROM disc required. Just a Mega Drive + Mega CD attached.
 
-![Gameplay screenshot — square web, blue palette, yellow claw](docs/screenshot.png)
+[![Watch the demo on YouTube — real Mega Drive + Mega CD hardware](https://img.youtube.com/vi/EKqgXYvCzAo/maxresdefault.jpg)](https://www.youtube.com/watch?v=EKqgXYvCzAo)
+
+▶ **[Watch the demo on YouTube](https://www.youtube.com/watch?v=EKqgXYvCzAo)** — gameplay captured on real Mega Drive + Mega CD hardware.
 
 > **Status: v0.1-beta (work in progress).** Verified working on **real Mega Drive + Mega CD hardware** (2026-05-30) and in [ares](https://ares-emu.net/); BlastEm has known Mode 1 quirks. Feedback and bug reports welcome. See [Known limitations](#known-limitations) below.
 
