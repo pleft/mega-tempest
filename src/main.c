@@ -10,6 +10,7 @@
 #include "mcd.h"
 #include "psg.h"
 #include "web.h"
+#include "hiscore.h"
 #include <main/io.h>
 #include <main/memmap.h>
 #include <main/vdp.h>
@@ -179,7 +180,7 @@ typedef struct {
 
 static EngineState g_engine;
 
-static u8  g_mcd_present;
+u8  g_mcd_present;
 static u8  g_music_playing;
 static u8  g_music_idx;          /* gameplay tune slot (0..3); 0xFF = none */
 static u8  g_scene_dirty;     // set by install_*; main loop redraws static text
@@ -190,11 +191,22 @@ static void title_main_thread(void);
 static void play_main_thread(void);
 static void install_gameover(void);
 static void gameover_main_thread(void);
+static void install_hiscore_entry(void);
 
 // ---- Scene: TITLE ---------------------------------------------------------
 
 /* Forward — g_anim_frame is defined in the play-scene section below. */
 extern u8 g_anim_frame;
+
+/* Title-screen attract loop — alternates every ATTRACT_PERIOD frames:
+ *   0 = BANNER  : ASIC-pulsed MEGA TEMPEST banner + flashing START prompt
+ *   1 = HISCORE : static MEGA TEMPEST text at top + hall-of-fame table
+ * State + transition tracked here; the per-state rendering lives in
+ * title_gated_vblank (ASIC kick gate) + title_main_thread (text). */
+#define ATTRACT_PERIOD 480    /* 480 / 60 Hz = 8 s per state (Jag uses ~13 s; halved cycle here is fine for our 2-state loop) */
+static u8  g_attract_state;
+static u8  g_attract_prev_state;
+static u16 g_attract_timer;
 
 static void title_always_vblank(void) { return; }
 static void title_gated_vblank (void)
@@ -204,15 +216,21 @@ static void title_gated_vblank (void)
   g_anim_frame++;
   update_starfield();
 
-  /* ASIC pulse on the "MEGA TEMPEST" banner. dx sweeps symmetrically
-   * around identity (0x0800) so the text both grows AND shrinks past
-   * its baseline size — wider range than before for a more dramatic
-   * pulse. IMG painted at plane_x=9, plane_y=1 so the text sits
-   * higher on screen and lines up horizontally with START = PLAY. */
-  if (g_mcd_present) {
-    u8 t   = (u8) ((g_anim_frame >> 1) & 0x7F);      /* 0..127 */
-    u8 tri = (t < 64) ? t : (u8) (127 - t);          /* 0..63..0 triangle */
-    s16 dx = (s16) (0x0800 + ((s16) tri - 32) * 0x30);  /* 0x0200..0x0DD0 */
+  /* Attract-loop state tick. */
+  g_attract_timer++;
+  if (g_attract_timer >= ATTRACT_PERIOD) {
+    g_attract_timer = 0;
+    g_attract_state ^= 1;
+  }
+
+  /* BANNER state only — pulse the ASIC banner. HISCORE state leaves
+   * plane B alone (cleared by the BANNER→HISCORE transition in
+   * title_main_thread); skipping the kick lets the table on plane A
+   * show against the variant pipeline's last frame or a clean B. */
+  if (g_mcd_present && g_attract_state == 0) {
+    u8 t   = (u8) ((g_anim_frame >> 1) & 0x7F);
+    u8 tri = (t < 64) ? t : (u8) (127 - t);
+    s16 dx = (s16) (0x0800 + ((s16) tri - 32) * 0x30);
     mcd_render_asic_scale(0x4000, 0x280, 9, 1, dx);
   }
 }
@@ -224,6 +242,9 @@ static void install_title(void)
   g_engine.main_thread   = title_main_thread;
   g_engine.paused        = 0;
   g_scene_dirty          = 1;
+  g_attract_state        = 0;       /* always start in BANNER mode */
+  g_attract_timer        = 0;
+  g_attract_prev_state   = 0xFF;
 
   if (g_mcd_present) {
     /* Stop whatever's playing, then upload + start the title theme
@@ -1326,7 +1347,10 @@ static void play_gated_vblank(void)
     g_respawn_timer--;
     if (g_respawn_timer == 0) {
       if (g_lives == 0) {
-        install_gameover();
+        /* Hi-score qualifying run → initials entry first; otherwise
+         * straight to GAME OVER. */
+        if (hiscore_qualifies((u32) g_score)) install_hiscore_entry();
+        else                                   install_gameover();
         return;
       }
       u8 start_lane = web_default_start_lane();
@@ -1339,24 +1363,102 @@ static void play_gated_vblank(void)
 
 // ---- Scene main_thread bodies ---------------------------------------------
 
+/* Format helpers for the hi-score table display. */
+static void title_paint_hiscore_row(u8 row, u8 rank, const HiScoreEntry * e)
+{
+  /* "  N. ABC   NNNNNN  LV NN"  (rank, initials, 6-digit score, level) */
+  char buf[25];
+  for (u8 i = 0; i < 24; i++) buf[i] = ' ';
+  buf[24] = 0;
+
+  /* rank — 2 chars right-aligned, '.' after */
+  u8 r = (u8) (rank + 1);
+  if (r >= 10) { buf[0] = (char) ('0' + r / 10); buf[1] = (char) ('0' + r % 10); }
+  else          { buf[1] = (char) ('0' + r); }
+  buf[2] = '.';
+
+  buf[4] = (char) e->initials[0];
+  buf[5] = (char) e->initials[1];
+  buf[6] = (char) e->initials[2];
+
+  /* 6-digit score, leading zeros as spaces. Avoid u32 division (the
+   * cart doesn't link libgcc __udivsi3); use a place-value subtraction
+   * loop per digit. Powers of 10 up to 100000 fit in 32 bits. */
+  static const u32 PLACE[6] = { 100000ul, 10000ul, 1000ul, 100ul, 10ul, 1ul };
+  u32 s = e->score;
+  if (s > 999999ul) s = 999999ul;
+  u8 started = 0;
+  for (u8 d = 0; d < 6; d++) {
+    u32 p = PLACE[d];
+    u8  digit = 0;
+    while (s >= p) { s -= p; digit++; }
+    if (digit == 0 && !started && d < 5) buf[10 + d] = ' ';
+    else                                  { buf[10 + d] = (char) ('0' + digit); started = 1; }
+  }
+
+  buf[18] = 'L';
+  buf[19] = 'V';
+  buf[21] = (char) ('0' + (e->level / 10));
+  buf[22] = (char) ('0' + (e->level % 10));
+
+  print(buf, plane_xy(8, row));
+}
+
+static void title_paint_hiscores(void)
+{
+  /* Static title text at top — replaces the ASIC banner during this
+   * attract state. */
+  print("MEGA TEMPEST", plane_xy(14, 3));
+  print("HALL OF FAME", plane_xy(14, 5));
+  print("RK NAME    SCORE   LEVEL", plane_xy(8, 7));
+  for (u8 i = 0; i < HISCORE_COUNT; i++) {
+    title_paint_hiscore_row((u8) (9 + i), i, &g_hiscores.entries[i]);
+  }
+}
+
+static void title_clear_hiscores(void)
+{
+  /* Erase the static text + table rows so the BANNER state shows
+   * cleanly on its rendered area. */
+  print("            ", plane_xy(14, 3));
+  print("            ", plane_xy(14, 5));
+  print("                        ", plane_xy(8, 7));
+  for (u8 i = 0; i < HISCORE_COUNT; i++) {
+    print("                        ", plane_xy(8, (u8) (9 + i)));
+  }
+}
+
 static void title_main_thread(void)
 {
   if (g_scene_dirty) {
     clear_play_area();
-    /* "MEGA TEMPEST" is rendered on plane B via the ASIC engine — see
-     * install_title for the bake and title_gated_vblank for the per-
-     * frame zoom pulse. The plane-A print used to live here. */
-    /* Build / release tag in the lower-left corner. */
+    /* Bottom-row tags persist across attract states. */
     print("v0.1 BETA", plane_xy(2, 27));
-    /* MCD presence readout tucked in the lower-right corner. */
     print("MCD:",         plane_xy(28, 27));
     print(g_mcd_present ? "PRESENT" : "ABSENT ", plane_xy(33, 27));
     g_scene_dirty = 0;
+    g_attract_prev_state = 0xFF;       /* force a paint on first frame */
   }
 
-  /* Flash "START = PLAY" — ~0.5 s on / 0.5 s off via the global anim
-   * counter ticked by title_gated_vblank. */
-  {
+  /* Attract-state transitions: paint when entering a state, wipe
+   * when leaving. */
+  if (g_attract_state != g_attract_prev_state) {
+    if (g_attract_state == 1) {
+      /* BANNER → HISCORE: clear the ASIC-painted plane B + flashing
+       * START prompt, then paint the table on plane A. */
+      web_clear_plane_b();
+      print("            ", plane_xy(13, 16));
+      title_paint_hiscores();
+    } else {
+      /* HISCORE → BANNER: wipe the table; ASIC re-kick from
+       * title_gated_vblank repaints plane B starting next frame. */
+      title_clear_hiscores();
+    }
+    g_attract_prev_state = g_attract_state;
+  }
+
+  /* BANNER state: flash START = PLAY ~0.5 s on / 0.5 s off. */
+  if (g_attract_state == 0) {
     static u8 prev_flash = 0xFF;
     u8 cur_flash = (u8) ((g_anim_frame >> 5) & 1);
     if (cur_flash != prev_flash) {
@@ -1467,6 +1569,106 @@ static void play_main_thread(void)
    * zoom start; re-rendering would re-show the (frozen) claw. */
   if (g_zoom_out_frame == 0) render_sprites();
 
+}
+
+// ---- Scene: HI-SCORE ENTRY (post-game-over, if qualifying) ----------------
+//
+// After death + lives == 0, if g_score qualifies for the table, this scene
+// runs BEFORE the GAME OVER scene. Three-letter initials entry:
+//   D-pad ↑↓ : cycle current letter A..Z (wraps)
+//   D-pad ←→ : move to previous / next letter slot (wraps 0..2)
+//   A        : advance one slot; if at last slot, save + jump to GAME OVER
+//   START    : same as A on the last slot (one-press save shortcut)
+
+static u8  g_hiscore_initials[HISCORE_INITIALS_LEN];
+static u8  g_hiscore_slot;          /* current slot 0..2 */
+
+static void hiscore_entry_main_thread(void);
+
+static void install_hiscore_entry(void)
+{
+  g_engine.always_vblank = 0;
+  g_engine.gated_vblank  = 0;
+  g_engine.main_thread   = hiscore_entry_main_thread;
+  g_engine.paused        = 0;
+  g_scene_dirty          = 1;
+
+  /* Stop music — the gameover scene normally does this; we do it now
+   * since we run before it. */
+  if (g_mcd_present && g_music_playing) {
+    mcd_stop_mod();
+    mcd_wait_ack(CMD_STOP_MOD);
+    g_music_playing = 0;
+  }
+
+  /* Wipe leftover sprites + reset initials buffer. */
+  vdp_ctrl_32 = to_vdp_addr(0xb800) | VRAM_W;
+  vdp_data = 0; vdp_data = 0; vdp_data = 0; vdp_data = 0;
+  for (u8 i = 0; i < HISCORE_INITIALS_LEN; i++) g_hiscore_initials[i] = (u8) 'A';
+  g_hiscore_slot = 0;
+}
+
+static void hiscore_entry_repaint_letters(void)
+{
+  /* Three letters, centred at col 18. Underline (`_`) under the
+   * currently-selected slot. */
+  for (u8 i = 0; i < HISCORE_INITIALS_LEN; i++) {
+    plane_putc((u8) (18 + i * 2), 14, (char) g_hiscore_initials[i]);
+    plane_putc((u8) (18 + i * 2), 15, (i == g_hiscore_slot) ? '_' : ' ');
+  }
+}
+
+static void hiscore_entry_main_thread(void)
+{
+  if (g_scene_dirty) {
+    clear_play_area();
+    print("NEW HIGH SCORE",     plane_xy(13, 9));
+    print("ENTER YOUR INITIALS", plane_xy(11, 11));
+    print("U D - L R - A",      plane_xy(14, 19));
+    print("CYCLE  MOVE  SAVE",  plane_xy(12, 20));
+    hiscore_entry_repaint_letters();
+    g_scene_dirty = 0;
+  }
+
+  /* Cycle current slot's letter. Letters are 'A'..'Z' (26 values). */
+  if (p1_single & PAD_UP) {
+    g_hiscore_initials[g_hiscore_slot] = (u8) (g_hiscore_initials[g_hiscore_slot] + 1);
+    if (g_hiscore_initials[g_hiscore_slot] > (u8) 'Z') g_hiscore_initials[g_hiscore_slot] = (u8) 'A';
+    hiscore_entry_repaint_letters();
+  }
+  if (p1_single & PAD_DOWN) {
+    g_hiscore_initials[g_hiscore_slot] = (u8) (g_hiscore_initials[g_hiscore_slot] - 1);
+    if (g_hiscore_initials[g_hiscore_slot] < (u8) 'A') g_hiscore_initials[g_hiscore_slot] = (u8) 'Z';
+    hiscore_entry_repaint_letters();
+  }
+
+  /* Move slot. Avoid 32-bit %; cart doesn't link libgcc __modsi3. */
+  if (p1_single & PAD_LEFT) {
+    g_hiscore_slot = g_hiscore_slot ? (u8) (g_hiscore_slot - 1)
+                                    : (u8) (HISCORE_INITIALS_LEN - 1);
+    hiscore_entry_repaint_letters();
+  }
+  if (p1_single & PAD_RIGHT) {
+    g_hiscore_slot = (g_hiscore_slot >= HISCORE_INITIALS_LEN - 1)
+                       ? (u8) 0 : (u8) (g_hiscore_slot + 1);
+    hiscore_entry_repaint_letters();
+  }
+
+  /* A = advance slot; on the final slot, save + go to GAME OVER. */
+  if (p1_single & PAD_A) {
+    if (g_hiscore_slot < HISCORE_INITIALS_LEN - 1) {
+      g_hiscore_slot++;
+      hiscore_entry_repaint_letters();
+    } else {
+      hiscore_insert((u32) g_score, g_hiscore_initials, (u8) (g_wave_num + 1));
+      install_gameover();
+    }
+  }
+  /* START = save immediately, regardless of slot. */
+  if (p1_single & PAD_START) {
+    hiscore_insert((u32) g_score, g_hiscore_initials, (u8) (g_wave_num + 1));
+    install_gameover();
+  }
 }
 
 // ---- Scene: GAME OVER -----------------------------------------------------
@@ -1607,6 +1809,11 @@ void main(void)
   g_mcd_present = detect_mega_cd();
   if (g_mcd_present) mcd_init();
   g_music_playing = 0;
+
+  /* Load default hi-score table into RAM. BRAM persistence is parked
+   * for v0.3 (Mode 1 cart can't reach BIOS BURAM safely) — table is
+   * session-only for v0.2. */
+  hiscore_init();
 
   psg_init();
   install_title();

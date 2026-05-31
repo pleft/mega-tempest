@@ -13,6 +13,7 @@ extern u16 vdp_regs[18];   /* defined in main.c */
 #define GA_REG_COMCMD1_W      ((volatile u16 *) 0xA12012)
 #define GA_REG_COMCMD2_W      ((volatile u16 *) 0xA12014)
 #define GA_REG_COMSTAT0_W     ((volatile u16 *) 0xA12020)
+#define GA_REG_COMSTAT1_W     ((volatile u16 *) 0xA12022)
 #define PRG_RAM_WINDOW        ((volatile u16 *) 0x420000)
 
 static void sub_request_bus(void)     { *GA_REG_SUBCTRL_B = 0x02; while (!((*GA_REG_SUBCTRL_B) & 0x02)) ; }
@@ -24,6 +25,9 @@ static void copy_words(const char * src, volatile u16 * dst, u32 size_bytes)
   u32 n = (size_bytes + 1) >> 1;
   while (n--) *dst++ = *s++;
 }
+
+/* Forward declaration — definition lower in the file. */
+static u16 mcd_wait_ack_timeout(u16 expected);
 
 u8 detect_mega_cd(void)
 {
@@ -83,6 +87,63 @@ void mcd_play_sfx(u8 idx)
   *GA_REG_COMCMD1_W = (u16) idx;
   *GA_REG_COMCMD0_W = CMD_PLAY_SFX;
   mcd_wait_ack(CMD_PLAY_SFX);
+}
+
+/* Backup RAM hi-score I/O.
+ *
+ * Shared buffer is at PRG-RAM bank 0 offset $1000 (sub-side address),
+ * accessed by main via the PRG-RAM window at $421000 with bank 0
+ * selected. mcd_hiscore_load asks the sub to BRMREAD "MEGATEMPHI"
+ * into that slot, then copies it to `buf` for the cart's hi-score
+ * module to consume. mcd_hiscore_save does the inverse.
+ *
+ * Return value of load: 0 = ok, non-zero = file missing / BRAM unformatted.
+ * Return value of save: 0 = ok, non-zero = BRAM unformatted or write failed. */
+#define BRAM_BUF_SUB_OFFSET 0x1000
+#define BRAM_BUF_MAIN_ADDR  ((volatile u16 *) (0x420000 + BRAM_BUF_SUB_OFFSET))
+
+u16 mcd_hiscore_load(u8 * buf, u16 len)
+{
+  *GA_REG_COMCMD0_W = CMD_BRAM_LOAD;
+  if (mcd_wait_ack_timeout(CMD_BRAM_LOAD) != 0) {
+    /* Sub didn't ack — BIOS BRMINIT may have hung. Force-clear COMCMD0
+     * so the sub can recover next command. */
+    *GA_REG_COMCMD0_W = 0;
+    return 0xFFFF;
+  }
+  u16 result = *GA_REG_COMSTAT1_W;
+  if (result == 0xFFFF) return 0xFFFF;
+  /* result holds the file size in bytes. Bound to caller's buffer. */
+  if (len > result) len = result;
+  sub_request_bus();
+  *GA_REG_MEMMODE_W = (0 << 6);                     /* bank 0 */
+  volatile u16 * src = BRAM_BUF_MAIN_ADDR;
+  u16 words = (u16) ((len + 1) >> 1);
+  u16 * d   = (u16 *) buf;
+  for (u16 i = 0; i < words; i++) d[i] = src[i];
+  *GA_REG_MEMMODE_W = 0x0000;
+  sub_release_and_run();
+  return 0;
+}
+
+u16 mcd_hiscore_save(const u8 * buf, u16 len)
+{
+  if (len == 0 || len > 256) return 0xFFFF;
+  sub_request_bus();
+  *GA_REG_MEMMODE_W = (0 << 6);                     /* bank 0 */
+  volatile u16 * dst = BRAM_BUF_MAIN_ADDR;
+  u16 words = (u16) ((len + 1) >> 1);
+  const u16 * s = (const u16 *) buf;
+  for (u16 i = 0; i < words; i++) dst[i] = s[i];
+  *GA_REG_MEMMODE_W = 0x0000;
+  sub_release_and_run();
+  *GA_REG_COMCMD1_W = len;
+  *GA_REG_COMCMD0_W = CMD_BRAM_SAVE;
+  if (mcd_wait_ack_timeout(CMD_BRAM_SAVE) != 0) {
+    *GA_REG_COMCMD0_W = 0;
+    return 0xFFFF;
+  }
+  return *GA_REG_COMSTAT1_W;
 }
 
 /* Word RAM 2M ownership control (Mode 1 main view): the MEMMODE lo byte at
@@ -490,6 +551,19 @@ void mcd_wait_ack(u16 expected)
   while (*GA_REG_COMSTAT0_W != expected) ;
   *GA_REG_COMCMD0_W = 0;
   while (*GA_REG_COMSTAT0_W != 0) ;
+}
+
+/* Same as mcd_wait_ack but bounded to ~1 M poll iterations (~0.5 s on
+ * a 7.6 MHz 68000). Returns 0 on success, non-zero on timeout — used by
+ * BRAM I/O so a misbehaving BIOS dispatcher can't hang the boot. */
+static u16 mcd_wait_ack_timeout(u16 expected)
+{
+  u32 t = 1000000ul;
+  while (*GA_REG_COMSTAT0_W != expected) { if (--t == 0) return 1; }
+  *GA_REG_COMCMD0_W = 0;
+  t = 1000000ul;
+  while (*GA_REG_COMSTAT0_W != 0) { if (--t == 0) return 2; }
+  return 0;
 }
 
 /* ---- Pre-baked 3D variants ----------------------------------------------

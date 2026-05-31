@@ -38,5 +38,6 @@ $(PROJECT_ID).cart: \
 	psg.c \
 	web.c \
 	sprites.c \
+	hiscore.c \
 	mulsi3.s \
 	res.s

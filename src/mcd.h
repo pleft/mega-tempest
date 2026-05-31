@@ -70,4 +70,10 @@ void mcd_render_web_direct(u8 line_pal, u16 plane_vram_addr, u16 tile_base,
 
 void mcd_wait_ack(u16 expected);
 
+/* Backup RAM hi-score I/O. Both return 0 = success, non-zero = failure
+ * (file missing on load, or BRAM unformatted / write rejected on save).
+ * `len` must be ≤ 256 bytes (size of the PRG-RAM shared slot). */
+u16 mcd_hiscore_load(u8 * buf, u16 len);
+u16 mcd_hiscore_save(const u8 * buf, u16 len);
+
 #endif

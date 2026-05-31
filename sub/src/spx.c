@@ -821,6 +821,136 @@ __attribute__((section(".init"))) void main()
       case CMD_PLAY_SFX:
         sfx_play((uint8_t) (*ga_reg_comcmd1 & 0xFF));
         break;
+
+      /* ---- Backup RAM (BURAM) hi-score persistence ----
+       *
+       * Both BRMREAD and BRMWRITE are called via the BIOS BURAM jump
+       * vector at $5F16. We use megadev's calling convention for the
+       * registers but write the asm inline here to avoid pulling
+       * megadev's types.h (which clashes with <stdint.h> via int8_t).
+       *
+       * Shared data buffer is at PRG-RAM bank 0 offset $1000 (256
+       * bytes — large enough for an 88-byte hi-score table + headroom).
+       * Filename is the standard 11-char Sega BRAM format. */
+      case CMD_BRAM_LOAD: {
+        static uint8_t brm_work[0x640];
+        static uint8_t brm_str[12];
+        /* Build the filename on the stack — megadev's sub runtime does
+         * NOT initialise .data, so "MEGATEMPHI" as a string literal
+         * would be garbage bytes at runtime. Assign byte-by-byte. */
+        char brm_filename[12];
+        brm_filename[ 0]='M'; brm_filename[ 1]='E'; brm_filename[ 2]='G';
+        brm_filename[ 3]='A'; brm_filename[ 4]='T'; brm_filename[ 5]='E';
+        brm_filename[ 6]='M'; brm_filename[ 7]='P'; brm_filename[ 8]='H';
+        brm_filename[ 9]='I'; brm_filename[10]= 0 ; brm_filename[11]= 0 ;
+        uint16_t brm_size;
+        uint16_t brm_status;
+
+        /* BRMINIT — must call before any other BRAM op. */
+        {
+          register uint32_t a0_work asm("a0") = (uint32_t) brm_work;
+          register uint32_t a1_str  asm("a1") = (uint32_t) brm_str;
+          register uint16_t d0_fc   asm("d0") = 0x0000;     /* BRMINIT */
+          register uint16_t d0_out  asm("d0");
+          register uint16_t d1_out  asm("d1");
+          asm volatile (
+            "jsr 0x5F16\n\t"
+            "bcs 1f\n\t"
+            "moveq #3, %1\n\t"
+            "1:\n\t"
+            : "=d"(d0_out), "=d"(d1_out)
+            : "d"(d0_fc), "a"(a0_work), "a"(a1_str)
+            : "cc");
+          brm_size   = d0_out;
+          brm_status = d1_out;
+          (void) brm_size;
+        }
+        if (brm_status != 3) {                              /* not Sega-formatted */
+          *ga_reg_comstat1 = 0xFFFF;
+          break;
+        }
+
+        /* BRMREAD — load "MEGATEMPHI" into the PRG-RAM shared slot. */
+        {
+          register uint32_t a0_fn asm("a0") = (uint32_t) brm_filename;
+          register uint32_t a1_buf asm("a1") = (uint32_t) BRAM_BUF_SUB_OFFSET;
+          register uint16_t d0_fc asm("d0") = 0x0003;       /* BRMREAD */
+          register uint16_t d0_out asm("d0");
+          register uint8_t  d1_out asm("d1");
+          asm volatile (
+            "jsr 0x5F16\n\t"
+            "bcc 1f\n\t"
+            "move.w #0xFFFF, %0\n\t"
+            "1:\n\t"
+            : "=d"(d0_out), "=d"(d1_out)
+            : "d"(d0_fc), "a"(a0_fn), "a"(a1_buf)
+            : "cc");
+          *ga_reg_comstat1 = d0_out;                        /* size or 0xFFFF */
+        }
+        break;
+      }
+
+      case CMD_BRAM_SAVE: {
+        static uint8_t brm_work[0x640];
+        static uint8_t brm_str[12];
+        /* BramFileInfo layout: filename[11] + mode (u8) + blocksize (u16).
+         * On the stack so the runtime fields don't depend on .data init. */
+        struct { char fn[11]; uint8_t mode; uint16_t blocksize; } brm_info;
+        uint16_t size = *ga_reg_comcmd1;                    /* bytes to save */
+        if (size == 0 || size > 256) {
+          *ga_reg_comstat1 = 0xFFFF;
+          break;
+        }
+        brm_info.fn[ 0]='M'; brm_info.fn[ 1]='E'; brm_info.fn[ 2]='G';
+        brm_info.fn[ 3]='A'; brm_info.fn[ 4]='T'; brm_info.fn[ 5]='E';
+        brm_info.fn[ 6]='M'; brm_info.fn[ 7]='P'; brm_info.fn[ 8]='H';
+        brm_info.fn[ 9]='I'; brm_info.fn[10]= 0 ;
+        brm_info.mode      = 0;
+        brm_info.blocksize = size;
+
+        /* BRMINIT. */
+        uint16_t brm_status;
+        {
+          register uint32_t a0_work asm("a0") = (uint32_t) brm_work;
+          register uint32_t a1_str  asm("a1") = (uint32_t) brm_str;
+          register uint16_t d0_fc   asm("d0") = 0x0000;
+          register uint16_t d0_out  asm("d0");
+          register uint16_t d1_out  asm("d1");
+          asm volatile (
+            "jsr 0x5F16\n\t"
+            "bcs 1f\n\t"
+            "moveq #3, %1\n\t"
+            "1:\n\t"
+            : "=d"(d0_out), "=d"(d1_out)
+            : "d"(d0_fc), "a"(a0_work), "a"(a1_str)
+            : "cc");
+          brm_status = d1_out;
+          (void) d0_out;
+        }
+        if (brm_status != 3) {
+          *ga_reg_comstat1 = 0xFFFF;
+          break;
+        }
+
+        /* BRMWRITE — saves the buffer at PRG-RAM bank 0 offset $1000. */
+        {
+          register uint32_t a0_info asm("a0") = (uint32_t) &brm_info;
+          register uint32_t a1_data asm("a1") = (uint32_t) BRAM_BUF_SUB_OFFSET;
+          register uint16_t d0_fc   asm("d0") = 0x0004;     /* BRMWRITE */
+          register uint16_t d1_zero asm("d1") = 0;
+          uint16_t ok = 1;
+          asm volatile (
+            "jsr 0x5F16\n\t"
+            "bcc 1f\n\t"
+            "moveq #0, %0\n\t"
+            "1:\n\t"
+            : "+d"(ok), "+d"(d1_zero)
+            : "d"(d0_fc), "a"(a0_info), "a"(a1_data)
+            : "cc");
+          *ga_reg_comstat1 = ok ? 0 : 0xFFFF;
+        }
+        break;
+      }
     }
 
     /* Standard megadev command ack handshake. */
