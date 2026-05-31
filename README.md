@@ -75,6 +75,8 @@ For a port of Tempest 2000 — a 60 Hz vector-3D shooter with full MOD-tracker m
 - **Bonus life every 4 waves** (capped at 9), celebrated with a "1UP!" on the splash
 - **Superzapper power-up** — 1 charge per wave; clears every live enemy with a screen-flash + per-kill spark + the Jag's own Crackle PCM
 - **Six power-ups** — dropped by killed tankers: LASER (rapid fire), JUMP (immune to rim deaths), extra life, extra superzapper charge, wave-skip, and an AI droid sidekick that walks the rim and fires at the nearest enemy
+- **Enemy variants** — green fuse-tankers split into 2 fuseballs, cyan pulsar-tankers split into 2 pulsars, white super-flippers (≈1.5× faster) — introduced across waves 6-9 to ramp difficulty
+- **Hall of Fame** — 10-entry hi-score table modelled on the Jag's, displayed on the title screen via an 8-second attract-loop swap with the banner; after game-over the player enters 3-letter initials if they qualify (session-only — persistence to Backup RAM is a v0.3 item)
 - **Web shape rotation** — 8 shapes from the Jag (V, square, plus, triangle, pentagon, star, W, fan) extracted directly from `yak.s`
 - **3-life player loop** → game over → back to title; START pauses
 - **Iconic fly-down-tube wave transition** rendered by the Mega CD ASIC
@@ -88,7 +90,7 @@ For a port of Tempest 2000 — a 60 Hz vector-3D shooter with full MOD-tracker m
 This is a **v0.1-beta**. The core gameplay loop is complete and stable, but the following are known and intentional gaps:
 
 - **Loops at wave 16.** The Jag original has 99 levels with bonus stages and a warp mechanic between them. The port currently cycles the 16 wave definitions endlessly with escalating difficulty. Bonus stages + the level-99 victory + Beastly NG+ mode are scoped but not implemented.
-- **No high-score persistence.** No SRAM save yet.
+- **Hi-score table is session-only.** Backup-RAM persistence between power cycles is a v0.3 item — the Mode 1 cart's bootstrap doesn't initialise the BIOS state that the BURAM calls need, so saves currently hang. Table + qualifying detection + initials entry all work in-session.
 - **No options screen or level select.**
 - **Real-hardware behaviour.** Verified booting + playing end-to-end on real Mega Drive + Mega CD as of 2026-05-30. **One known hardware-only audio issue**: a faint echo on some `rave4.mod` samples that does not reproduce in ares — suspected PCM-RAM allocation overlap with SFX, pending fix.
 - **Emulator support.** Developed against [ares](https://ares-emu.net/), which models the Mega CD ASIC and Word RAM accurately. **BlastEm has known Mode 1 sub-CPU / Word-RAM issues** — graphics will glitch or hang.
