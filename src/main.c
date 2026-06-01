@@ -295,7 +295,35 @@ static u8  g_right_tick;
 static u8  g_fire_cooldown;      // frames until next shot allowed
 static u16 g_spawn_timer;        // frames until next flipper spawn
 static u8  g_enemy_count;
-static u16 g_score;
+static u32 g_score;
+/* High-water mark of the 10 000-point threshold last awarded a bonus
+ * life. Initialised at the start of each game in install_playfield.
+ * When g_score crosses a new 10k boundary upward, we award +1 life and
+ * bump g_score_next_life by 10 000. Matches the Jag's mechanic at
+ * yak.s:18380-18383 (replaces our older every-4-waves bonus). */
+static u32 g_score_next_life;
+/* Wave-completion bonus computed in next_wave() and displayed as
+ * "BONUS NNNNNN" on the WAVE-GET-READY splash for the cleared wave. */
+static u32 g_wave_clear_bonus;
+
+/* Jaguar per-enemy point values (yak.s:22772-22785 via the doscore
+ * dispatch table). Tanker break itself awards 0 — the spawned children
+ * score on their own kills. Super-flipper / blue-flipper share the
+ * regular flipper value (the Jag scoring doesn't distinguish). */
+#define PTS_FLIPPER        100u
+#define PTS_SUPER_FLIPPER  100u
+#define PTS_TANKER           0u
+#define PTS_PULSAR          10u
+#define PTS_FUSEBALL       250u
+#define PTS_SPIKER         100u
+#define PTS_SPIKE_SEG      200u
+#define PTS_POWERUP_PICKUP   5u   /* small "thanks for catching it" — not from Jag */
+
+/* Centralised score award — bumps g_score and runs the 10 000-point
+ * bonus-life check. Use this for every score gain so the threshold
+ * cross is always caught. Body defined further down where g_lives
+ * is in scope. */
+static void award_score(u32 points);
 static u8  g_lives;              // remaining lives — game over at 0
 u8         g_anim_frame;         // global frame counter — drives flipper rotation
 static u32 g_rng = 0xCAFEF00Du;
@@ -340,6 +368,16 @@ static u8  g_pool[5];           // remaining-to-spawn: [flipper, tanker, pulsar,
 static u8  g_wave_clear_timer;  // counts up while wave-clear conditions hold
 #define WAVE_CLEAR_DELAY 60     // 1 sec of empty-web pause before zoom fires
 
+/* award_score body — g_lives is in scope by now. */
+static void award_score(u32 points)
+{
+  g_score += points;
+  while (g_score >= g_score_next_life && g_lives < 9) {
+    g_lives++;
+    g_score_next_life += 10000ul;
+  }
+}
+
 /* Fly-down-tube transition: after the wave-clear hold, scroll plane B
  * vertically each frame so the web slides off-screen. After ZOOM_OUT_FRAMES
  * the bake runs (next_wave). Plane B is the web only — plane A (stars,
@@ -354,12 +392,6 @@ static u8  g_zoom_out_frame;    // 0 = idle; 1..ZOOM_OUT_FRAMES while zooming
  * running so HUD + splash text render. */
 static u16 g_splash_timer;
 #define SPLASH_FRAMES 90
-
-/* Bonus life: every BONUS_LIFE_EVERY waves cleared, +1 life (capped at
- * the HUD's single-digit ceiling). g_bonus_life_pending is consumed by
- * the wave splash to also draw a "1UP!" line. */
-#define BONUS_LIFE_EVERY 4
-static u8 g_bonus_life_pending;
 
 /* Power-ups — dropped by killed tankers, drift outward to the rim.
  * Collected when reaching the rim on the player's lane.
@@ -744,14 +776,19 @@ static void next_wave(void)
   g_enemy_count = 0;
   for (u8 k = 0; k < MAX_LANES; ++k) { g_spike_depth[k] = 0; g_spike_flash[k] = 0; }
 
-  /* Bonus-life check before the wave counter ticks: completing wave N
-   * (1-based) earns a life when N % BONUS_LIFE_EVERY == 0. The flag is
-   * picked up by the wave splash. */
-  u16 completed_wave = (u16) (g_wave_num + 1);
-  if (completed_wave % BONUS_LIFE_EVERY == 0 && g_lives < 9) {
-    g_lives++;
-    g_bonus_life_pending = 1;
-  }
+  /* Wave-completion bonus — Jag formula (yak.s:9067-9075):
+   *   bonus = 2600 + 200·L + L³
+   * Computed on the COMPLETED wave (1-based); awarded via award_score
+   * so the 10k bonus-life check fires as part of the bump. Stored in
+   * g_wave_clear_bonus so the next splash can display "BONUS NNNNNN". */
+  u32 L = (u32) (g_wave_num + 1);              /* 1-based completed wave */
+  u32 bonus = 2600ul + 200ul * L + L * L * L;
+  g_wave_clear_bonus = bonus;
+  award_score(bonus);
+  /* Older every-4-waves bonus-life replaced by the 10k threshold
+   * inside award_score(). The "1UP!" splash line is no longer fired
+   * here — extra lives just appear in the HUD as the score crosses
+   * 10k boundaries. */
 
   g_wave_num++;
   g_web_shape = (u8) (g_wave_num % WEB_SHAPE_COUNT);
@@ -891,6 +928,8 @@ static void install_playfield(void)
   g_fire_cooldown = 0;
   g_enemy_count = 0;
   g_score = 0;
+  g_score_next_life = 10000ul;       /* first bonus life at 10 000 points */
+  g_wave_clear_bonus = 0;
   g_lives = LIVES_START;
   g_respawn_timer = 0;
   for (u8 k = 0; k < MAX_LANES; ++k) { g_spike_depth[k] = 0; g_spike_flash[k] = 0; }
@@ -1183,7 +1222,7 @@ static void play_gated_vblank(void)
                                 g_zoom_out_frame = 1;                  break;
             case PUP_DROID: spawn_droid(g_player_lane);                break;
           }
-          g_score += 5;
+          award_score(PTS_POWERUP_PICKUP);
           if (g_mcd_present) mcd_play_sfx(1);    /* re-use HIT cue */
           else               sfx_hit();
         }
@@ -1210,12 +1249,15 @@ static void play_gated_vblank(void)
           if (d < 0) d = -d;
           if (d <= HIT_DEPTH_TOL) {
             entity_kill(s);
-            if      (f->type == E_TANKER)        { split_tanker(f); g_score += 2; }
-            else if (f->type == E_PULSAR)        { kill_enemy(f);   g_score += 3; }
-            else if (f->type == E_FUSEBALL)      { kill_enemy(f);   g_score += 4; }
-            else if (f->type == E_SPIKER)        { kill_enemy(f);   g_score += 2; }
-            else if (f->type == E_SUPER_FLIPPER) { kill_enemy(f);   g_score += 2; }
-            else                                 { kill_enemy(f);   g_score++;    }
+            /* Jag per-enemy points (yak.s scoring table). Tanker break
+             * itself scores 0 — the two spawned children score on their
+             * own kills. */
+            if      (f->type == E_TANKER)        { split_tanker(f); award_score(PTS_TANKER);        }
+            else if (f->type == E_PULSAR)        { kill_enemy(f);   award_score(PTS_PULSAR);        }
+            else if (f->type == E_FUSEBALL)      { kill_enemy(f);   award_score(PTS_FUSEBALL);      }
+            else if (f->type == E_SPIKER)        { kill_enemy(f);   award_score(PTS_SPIKER);        }
+            else if (f->type == E_SUPER_FLIPPER) { kill_enemy(f);   award_score(PTS_SUPER_FLIPPER); }
+            else                                 { kill_enemy(f);   award_score(PTS_FLIPPER);       }
             if (g_mcd_present) mcd_play_sfx(1);    /* 1 = HIT — PCM */
             else               sfx_hit();           /* PSG fallback */
             break;
@@ -1239,7 +1281,7 @@ static void play_gated_vblank(void)
         if (g_spike_depth[ss->lane] < 0) g_spike_depth[ss->lane] = 0;
         g_spike_flash[ss->lane] = SPIKE_FLASH_FRAMES;     /* trigger blink */
         entity_kill(ss);
-        g_score += 2;                                      /* Jag: +2 per cut */
+        award_score(PTS_SPIKE_SEG);                        /* Jag: 200 per cut */
         if (g_mcd_present) mcd_play_sfx(1);
         else               sfx_hit();
       }
@@ -1349,7 +1391,7 @@ static void play_gated_vblank(void)
       if (g_lives == 0) {
         /* Hi-score qualifying run → initials entry first; otherwise
          * straight to GAME OVER. */
-        if (hiscore_qualifies((u32) g_score)) install_hiscore_entry();
+        if (hiscore_qualifies(g_score)) install_hiscore_entry();
         else                                   install_gameover();
         return;
       }
@@ -1475,7 +1517,7 @@ static void play_main_thread(void)
 {
   if (g_scene_dirty) {
     clear_play_area();
-    print("SCORE:", plane_xy(28, 27));
+    print("SCORE:", plane_xy(26, 27));    /* widened readout to 6 digits at cols 32-37 */
     print("LIVES:", plane_xy( 2, 27));
     print("SZ:",    plane_xy(11, 27));     /* +1 col: spacer after LIVES digit */
     print("WAVE:",  plane_xy(16, 27));     /* +1 col: spacer after SZ digit    */
@@ -1493,12 +1535,31 @@ static void play_main_thread(void)
       plane_putc(17, 14, (char) ('0' + (w % 10)));
       plane_putc(16, 14, (char) ('0' + (w / 10)));
       print("GET READY", plane_xy(20, 14));
-      if (g_bonus_life_pending) print("1UP!", plane_xy(18, 16));
+      /* "BONUS NNNNNN" line — only shown when the previous wave was
+       * actually cleared (g_wave_clear_bonus > 0). Wave 1's first
+       * splash shows nothing here. Bonus value formatted with the
+       * same place-value loop as the HUD (no 32-bit divide). */
+      if (g_wave_clear_bonus > 0) {
+        char buf[14];
+        for (u8 i = 0; i < 13; i++) buf[i] = ' ';
+        buf[13] = 0;
+        buf[0] = 'B'; buf[1] = 'O'; buf[2] = 'N'; buf[3] = 'U'; buf[4] = 'S';
+        static const u32 PLACE[6] = { 100000ul, 10000ul, 1000ul, 100ul, 10ul, 1ul };
+        u32 s = g_wave_clear_bonus;
+        u8  started = 0;
+        for (u8 d = 0; d < 6; d++) {
+          u8 digit = 0;
+          while (s >= PLACE[d]) { s -= PLACE[d]; digit++; }
+          if (digit == 0 && !started && d < 5) buf[6 + d] = ' ';
+          else                                  { buf[6 + d] = (char) ('0' + digit); started = 1; }
+        }
+        print(buf, plane_xy(14, 16));
+      }
     }
     if (!cur_splash && prev_splash) {
       print("                  ", plane_xy(11, 14));   /* WAVE line */
-      print("      ",             plane_xy(18, 16));   /* 1UP line  */
-      g_bonus_life_pending = 0;
+      print("              ",     plane_xy(14, 16));   /* BONUS line */
+      g_wave_clear_bonus = 0;
     }
     prev_splash = cur_splash;
   }
@@ -1514,12 +1575,22 @@ static void play_main_thread(void)
     else                 print("     ", plane_xy(17, 14));   /* wipe overlay */
   }
 
-  // Score readout — 4 digits, no 32-bit divide needed.
-  u16 s = g_score;
-  plane_putc(37, 27, (char) ('0' + (s % 10))); s /= 10;
-  plane_putc(36, 27, (char) ('0' + (s % 10))); s /= 10;
-  plane_putc(35, 27, (char) ('0' + (s % 10))); s /= 10;
-  plane_putc(34, 27, (char) ('0' + (s % 10)));
+  // Score readout — 6 digits, leading zeros as spaces. Place-value
+  // subtraction loop (cart doesn't link libgcc __udivsi3).
+  {
+    static const u32 PLACE[6] = { 100000ul, 10000ul, 1000ul, 100ul, 10ul, 1ul };
+    u32 s = g_score;
+    if (s > 999999ul) s = 999999ul;
+    u8 started = 0;
+    for (u8 d = 0; d < 6; d++) {
+      u8 digit = 0;
+      while (s >= PLACE[d]) { s -= PLACE[d]; digit++; }
+      char c;
+      if (digit == 0 && !started && d < 5) c = ' ';
+      else                                  { c = (char) ('0' + digit); started = 1; }
+      plane_putc((u8) (32 + d), 27, c);
+    }
+  }
 
   // Lives readout — single digit (capped to 9 for safety).
   plane_putc(9, 27, (char) ('0' + (g_lives > 9 ? 9 : g_lives)));
@@ -1660,13 +1731,13 @@ static void hiscore_entry_main_thread(void)
       g_hiscore_slot++;
       hiscore_entry_repaint_letters();
     } else {
-      hiscore_insert((u32) g_score, g_hiscore_initials, (u8) (g_wave_num + 1));
+      hiscore_insert(g_score, g_hiscore_initials, (u8) (g_wave_num + 1));
       install_gameover();
     }
   }
   /* START = save immediately, regardless of slot. */
   if (p1_single & PAD_START) {
-    hiscore_insert((u32) g_score, g_hiscore_initials, (u8) (g_wave_num + 1));
+    hiscore_insert(g_score, g_hiscore_initials, (u8) (g_wave_num + 1));
     install_gameover();
   }
 }
@@ -1704,12 +1775,22 @@ static void gameover_main_thread(void)
     g_scene_dirty = 0;
   }
 
-  /* Score digits sit right after "SCORE " on the same row. */
-  u16 s = g_score;
-  plane_putc(24, 15, (char) ('0' + (s % 10))); s /= 10;
-  plane_putc(23, 15, (char) ('0' + (s % 10))); s /= 10;
-  plane_putc(22, 15, (char) ('0' + (s % 10))); s /= 10;
-  plane_putc(21, 15, (char) ('0' + (s % 10)));
+  /* Score digits sit right after "SCORE " on the same row — 6 digits,
+   * leading zeros as spaces. Same place-value loop as the HUD. */
+  {
+    static const u32 PLACE[6] = { 100000ul, 10000ul, 1000ul, 100ul, 10ul, 1ul };
+    u32 s = g_score;
+    if (s > 999999ul) s = 999999ul;
+    u8 started = 0;
+    for (u8 d = 0; d < 6; d++) {
+      u8 digit = 0;
+      while (s >= PLACE[d]) { s -= PLACE[d]; digit++; }
+      char c;
+      if (digit == 0 && !started && d < 5) c = ' ';
+      else                                  { c = (char) ('0' + digit); started = 1; }
+      plane_putc((u8) (21 + d), 15, c);
+    }
+  }
 
   if (p1_single & PAD_START) install_title();
 }

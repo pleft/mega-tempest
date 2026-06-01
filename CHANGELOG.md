@@ -6,7 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased] — v0.3-beta (in development)
 
-_Coming soon._
+### Changed
+- **Scoring is now on the Jaguar scale.** `g_score` promoted from `u16` to `u32`. Per-enemy points match the Jaguar's `doscore` table (yak.s:22772-22785): flipper / super-flipper / spiker = 100, pulsar = 10, fuseball = 250, spike segment = 200, tanker break itself = 0 (children score on their own kills). All score increments go through a new `award_score()` helper that also runs the bonus-life threshold check.
+- **Wave-completion bonus** awarded on each wave clear, computed via the Jag's formula `2600 + 200·L + L³` (yak.s:9067-9075). Displayed as `BONUS NNNNNN` on the WAVE-GET-READY splash.
+- **Bonus life mechanic swapped** from "every 4 waves" to the Jaguar's "every 10 000 points" threshold-cross (yak.s:18380-18383). Lives just appear silently in the HUD as the score passes 10k boundaries (no more "1UP!" splash line).
+- **HUD score readout widened** from 4 digits to 6, with leading zeros rendered as spaces. The `SCORE:` label moved left to accommodate. Same widening on the game-over screen.
+- **Hi-score table defaults** restored to the Jaguar's animal-named values (YAK 500 000 down to FUR 50 000) now that scoring is on the right scale.
+
+### Removed
+- `BONUS_LIFE_EVERY` define + `g_bonus_life_pending` flag (superseded by the 10k-threshold mechanic).
 
 ## [0.2.1-beta] — 2026-06-01
 

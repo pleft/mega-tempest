@@ -9,19 +9,19 @@ HiScoreTable g_hiscores;
 
 /* Default table — Easter-egg homage to the Jaguar T2K defaults
  * (yak.s:23807-23828, animal initials counting down from 500 000).
- * Values scaled down ~100× to fit our 4-digit HUD score readout in
- * v0.2; bump back up once scoring is rescaled in a follow-up. */
+ * Restored to the Jag values now that scoring is on the Jag scale
+ * (per-enemy = 100s instead of 1s, plus wave-completion bonuses). */
 static const HiScoreEntry DEFAULT_ENTRIES[HISCORE_COUNT] = {
-  { 5000ul, {'Y','A','K'}, 15 },
-  { 4500ul, {'E','W','E'}, 14 },
-  { 4000ul, {'C','O','W'}, 13 },
-  { 3500ul, {'G','N','U'}, 12 },
-  { 3000ul, {'O','X',' '}, 11 },
-  { 2500ul, {'E','L','K'}, 10 },
-  { 2000ul, {'D','O','E'},  9 },
-  { 1500ul, {'M','O','O'},  8 },
-  { 1000ul, {'B','A','A'},  7 },
-  {  500ul, {'F','U','R'},  6 },
+  { 500000ul, {'Y','A','K'}, 15 },
+  { 450000ul, {'E','W','E'}, 14 },
+  { 400000ul, {'C','O','W'}, 13 },
+  { 350000ul, {'G','N','U'}, 12 },
+  { 300000ul, {'O','X',' '}, 11 },
+  { 250000ul, {'E','L','K'}, 10 },
+  { 200000ul, {'D','O','E'},  9 },
+  { 150000ul, {'M','O','O'},  8 },
+  { 100000ul, {'B','A','A'},  7 },
+  {  50000ul, {'F','U','R'},  6 },
 };
 
 static const u8 MAGIC[4] = { 'M', 'E', 'G', 'T' };
