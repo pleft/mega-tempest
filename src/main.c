@@ -1433,7 +1433,7 @@ static void title_main_thread(void)
   if (g_scene_dirty) {
     clear_play_area();
     /* Bottom-row tags persist across attract states. */
-    print("v0.1 BETA", plane_xy(2, 27));
+    print("v0.2 WIP", plane_xy(2, 27));
     print("MCD:",         plane_xy(28, 27));
     print(g_mcd_present ? "PRESENT" : "ABSENT ", plane_xy(33, 27));
     g_scene_dirty = 0;

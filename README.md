@@ -8,7 +8,7 @@ No CD-ROM disc required. Just a Mega Drive + Mega CD attached.
 
 ▶ **[Watch the demo on YouTube](https://www.youtube.com/watch?v=EKqgXYvCzAo)** — gameplay captured on real Mega Drive + Mega CD hardware.
 
-> **Status: v0.1-beta (work in progress).** Verified working on **real Mega Drive + Mega CD hardware** (2026-05-30) and in [ares](https://ares-emu.net/); BlastEm has known Mode 1 quirks. Feedback and bug reports welcome. See [Known limitations](#known-limitations) below.
+> **Status: v0.2-beta (in development).** v0.1-beta was tagged 2026-05-29 and verified working on **real Mega Drive + Mega CD hardware** (2026-05-30). The current `main` is the in-development v0.2 — enemy variants + hall-of-fame table; the tag will land once the new content is HW-verified. ares and real hardware both supported; BlastEm has known Mode 1 quirks. See [CHANGELOG](CHANGELOG.md) for what's in each version and [Known limitations](#known-limitations) below.
 
 ---
 
@@ -87,7 +87,7 @@ For a port of Tempest 2000 — a 60 Hz vector-3D shooter with full MOD-tracker m
 
 ## Known limitations
 
-This is a **v0.1-beta**. The core gameplay loop is complete and stable, but the following are known and intentional gaps:
+This list reflects the current in-development build (v0.2-beta WIP). The core gameplay loop is complete and stable; the following are known and intentional gaps:
 
 - **Loops at wave 16.** The Jag original has 99 levels with bonus stages and a warp mechanic between them. The port currently cycles the 16 wave definitions endlessly with escalating difficulty. Bonus stages + the level-99 victory + Beastly NG+ mode are scoped but not implemented.
 - **Hi-score table is session-only.** Backup-RAM persistence between power cycles is a v0.3 item — the Mode 1 cart's bootstrap doesn't initialise the BIOS state that the BURAM calls need, so saves currently hang. Table + qualifying detection + initials entry all work in-session.
