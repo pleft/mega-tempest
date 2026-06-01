@@ -4,7 +4,11 @@ All notable changes to **MEGA TEMPEST** are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project loosely follows [Semantic Versioning](https://semver.org/), pre-1.0.
 
-## [Unreleased] — v0.2-beta (in development)
+## [Unreleased]
+
+_Nothing yet._
+
+## [0.2-beta] — 2026-06-01
 
 ### Added
 - **Enemy variants** — `fuse-tanker` (green, splits into 2 fuseballs), `pulsar-tanker` (cyan, splits into 2 pulsars), and `super-flipper` (white, ≈1.5× faster). Introduced across waves 6-9 to ramp difficulty. Tanker kind stored in unused `step_period` field; super-flipper is a new entity type sharing flipper tick/collision code. Per-sprite palette select renders the same sprite tiles in different colours. (MC-T49, `6fcdbe1`)
@@ -44,5 +48,6 @@ First public release. Tagged at commit `b95ccb4`; verified working on real Mega 
 - PAL timing untested
 - BlastEm has Mode 1 Sub-CPU / Word-RAM issues — use ares
 
-[Unreleased]: https://github.com/pleft/mega-tempest/compare/v0.1-beta...HEAD
+[Unreleased]: https://github.com/pleft/mega-tempest/compare/v0.2-beta...HEAD
+[0.2-beta]: https://github.com/pleft/mega-tempest/releases/tag/v0.2-beta
 [0.1-beta]: https://github.com/pleft/mega-tempest/releases/tag/v0.1-beta
