@@ -39,13 +39,28 @@ if not JAG_SRC.is_dir():
              "  Clone it: git clone https://github.com/mwenge/tempest2k")
 
 SFX = [
-    # (name, file, wrapped, max_pcm_bytes)
-    ("FIRE",  "06", True,  None),    # IFF 8SVX wrapper
-    ("HIT",   "17", False, None),    # raw PCM
-    ("DEATH", "04", False, None),    # raw PCM
+    # (name, file, wrapped, max_pcm_bytes, gain)
+    # `gain` pre-amplifies the signed PCM before sign-magnitude conversion
+    # (so the chip sees louder bytes). 1.0 = unchanged, >1.0 with hard
+    # clip at ±127. Use sparingly — the SFX bytes are added to MOD output
+    # by the chip, so over-loud SFX clips the MOD too.
+    ("FIRE",  "06", True,  None,  1.0),    # IFF 8SVX wrapper
+    ("HIT",   "17", False, None,  1.0),    # raw PCM
+    # DEATH is 21658 bytes (~1.3 s at 8363 Hz). Trim to ~15 KB (~0.9 s)
+    # — the impact / burst character is in the first ~0.5 s anyway —
+    # to free sub-ROM headroom for the EXCELLENT voice clip below.
+    ("DEATH", "04", False, 12000, 1.0),    # raw PCM
     # Crackle is 17812 bytes (~2.1 s at 8363 Hz). Trim to ~7 KB (~0.8 s)
     # so the whole sub module still fits in MODULE_ROM_LENGTH = 0xE000.
-    ("ZAP",   "08", False, 7000),    # raw PCM — sfx 7 "Crackle" in yak.s
+    ("ZAP",   "08", False, 7000,  1.0),    # raw PCM — sfx 7 "Crackle" in yak.s
+    # "EXCELLENT!" voice — Jag's sfx 21 (yak.s:10691, sayex routine).
+    # File 22 = sample 21 per the -1 mapping convention. Played at
+    # period 188 (≈ 19 kHz) on the cart — the Jag voice samples are
+    # recorded at that rate; the metadata's period 512 (≈ 6927 Hz) is
+    # just MOD reference notation, not the native rate.
+    # 11000 bytes / 19000 Hz ≈ 0.58 s, enough for the full word.
+    # Source is quietly recorded so apply 2.5× gain to cut through MOD.
+    ("EXC",   "22", False, 13500, 2.5),
 ]
 
 
@@ -76,20 +91,36 @@ def to_sign_magnitude(signed_pcm):
     return bytes(out)
 
 
+def apply_gain(signed_pcm, factor):
+    if factor == 1.0:
+        return signed_pcm
+    out = bytearray(len(signed_pcm))
+    for i, b in enumerate(signed_pcm):
+        s = b if b < 128 else b - 256
+        v = int(s * factor)
+        if v >  127: v =  127
+        if v < -128: v = -128
+        out[i] = v & 0xFF
+    return bytes(out)
+
+
 def main():
     blobs = []
-    for name, fn, wrapped, max_bytes in SFX:
+    for name, fn, wrapped, max_bytes, gain in SFX:
         raw = (JAG_SRC / fn).read_bytes()
         pcm = strip_8svx(raw) if wrapped else raw
         if max_bytes is not None and len(pcm) > max_bytes:
             pcm = pcm[:max_bytes]
+        if gain != 1.0:
+            pcm = apply_gain(pcm, gain)
         # Append 32 $FF bytes — matching pcm.c's loop_markers[] convention.
         # The chip advances past a single $FF before fully halting playback,
         # which lets it skid into stale data behind the sample and produce
         # an "echo". 32 markers keep it firmly in terminator mode.
         conv = to_sign_magnitude(pcm) + b'\xff' * 32
         blobs.append((name, conv))
-        print(f"  {name:6s} ← samples/{fn} ({len(pcm)} PCM bytes → {len(conv)} including 32-byte $FF tail)")
+        g_str = f" ×{gain}" if gain != 1.0 else ""
+        print(f"  {name:6s} ← samples/{fn} ({len(pcm)} PCM bytes{g_str} → {len(conv)} including 32-byte $FF tail)")
 
     # Header
     lines_h = [

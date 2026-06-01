@@ -12,3 +12,7 @@ prog_ram_*.bin
 
 # OS cruft
 .DS_Store
+
+# Tool-emitted debug artifacts
+/tools/sfx_previews/
+/res/*.mod.samples/

@@ -677,19 +677,24 @@ static void render_warp(void)
  * sample and just fits in this slot. */
 #define SFX_BANK       0x60          /* PCM offset $6000 */
 
-/* Table mapping SFX index → (data, length). Order must match the
- * caller's constants (0=FIRE, 1=HIT, 2=DEATH, 3=ZAP). */
-typedef struct { const uint8_t * data; uint16_t len; } sfx_entry_t;
-static const sfx_entry_t SFX_TABLE[4] = {
-  { SFX_FIRE,  sizeof SFX_FIRE  },
-  { SFX_HIT,   sizeof SFX_HIT   },
-  { SFX_DEATH, sizeof SFX_DEATH },
-  { SFX_ZAP,   sizeof SFX_ZAP   },
+/* Table mapping SFX index → (data, length, period). Order must match
+ * the caller's constants (0=FIRE, 1=HIT, 2=DEATH, 3=ZAP, 4=EXC).
+ * period: RF5C164 sample-rate divisor. 428 ≈ 8363 Hz (the MOD music
+ * baseline). The Jag voice samples are recorded at ~19 kHz so the
+ * EXCELLENT clip needs a lower period (188 ≈ 19000 Hz) — without it
+ * the voice plays in slow motion ~2.3× too slow and is unrecognisable. */
+typedef struct { const uint8_t * data; uint16_t len; uint16_t period; } sfx_entry_t;
+static const sfx_entry_t SFX_TABLE[5] = {
+  { SFX_FIRE,  sizeof SFX_FIRE,  428 },
+  { SFX_HIT,   sizeof SFX_HIT,   428 },
+  { SFX_DEATH, sizeof SFX_DEATH, 428 },
+  { SFX_ZAP,   sizeof SFX_ZAP,   428 },
+  { SFX_EXC,   sizeof SFX_EXC,   188 },     /* "Excellent!" voice — Jag sfx 21 @ 19 kHz */
 };
 
 static void sfx_play(uint8_t idx)
 {
-  if (idx >= 4) return;
+  if (idx >= 5) return;
   const sfx_entry_t * e = &SFX_TABLE[idx];
 
   /* MASK INTERRUPTS for the entire sfx_play. mod_tick (50 Hz timer)
@@ -724,7 +729,7 @@ static void sfx_play(uint8_t idx)
   pcm_set_env(0xFF);                                 /* max volume */
   *((volatile uint8_t *) 0xFF0003) = 0xFF;          /* L=F, R=F (centre loud) */
   pcm_delay();
-  pcm_set_period(428);                               /* Amiga C-2 ≈ 8363 Hz */
+  pcm_set_period(e->period);                         /* per-SFX rate (see SFX_TABLE) */
   pcm_set_on(SFX_CHANNEL);
 
   asm volatile("move.w #0x2000, %sr");

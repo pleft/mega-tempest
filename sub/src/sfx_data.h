@@ -9,12 +9,14 @@
 
 extern const uint8_t SFX_FIRE[1888];
 extern const uint8_t SFX_HIT[10966];
-extern const uint8_t SFX_DEATH[21690];
+extern const uint8_t SFX_DEATH[12032];
 extern const uint8_t SFX_ZAP[7032];
+extern const uint8_t SFX_EXC[13532];
 
 #define SFX_IDX_FIRE  0
 #define SFX_IDX_HIT  1
 #define SFX_IDX_DEATH  2
 #define SFX_IDX_ZAP  3
+#define SFX_IDX_EXC  4
 
 #endif

@@ -1547,6 +1547,11 @@ static void play_main_thread(void)
     u8 cur_clear = (g_wave_clear_timer > 0 && g_wave_deaths == 0) ? 1 : 0;
     if (cur_clear && !prev_clear) {
       print("EXCELLENT!", plane_xy(15, 14));
+      /* "Excellent!" voice sample — Jag sfx 21 (sayex routine,
+       * yak.s:10690-10697). Single-pitch playback here; the Jag does
+       * a two-pitch double-trigger ($160 + $162) for extra punch,
+       * parked for a follow-up once we add multi-pitch SFX support. */
+      if (g_mcd_present) mcd_play_sfx(4);
     }
     if (!cur_clear && prev_clear) {
       print("          ", plane_xy(15, 14));
