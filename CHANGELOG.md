@@ -13,6 +13,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - **HUD score readout widened** from 4 digits to 6, with leading zeros rendered as spaces. The `SCORE:` label moved left to accommodate. Same widening on the game-over screen.
 - **Hi-score table defaults** restored to the Jaguar's animal-named values (YAK 500 000 down to FUR 50 000) now that scoring is on the right scale.
 
+### Added
+- **EXCELLENT! splash** on a no-deaths wave clear. Centred text overlay during the 1 s wave-clear hold before the fly-down-tube transition.
+  *Adapted trigger*: the Jag's EXCELLENT (yak.s:4193, 4703) only fires on **warp-tunnel** or **bonus-stage** completions, which require the warp mechanic + the 3 bonus-level game scenes we haven't ported yet. Our closest faithful trigger is "wave cleared without dying" — keeps the flourish meaningful instead of cheapening it on every wave. When the warp / bonus-stage scenes land (v0.4+), revisit this trigger to match the Jag exactly. Audio (voice sample SFX #21 at two pitches) is also pending — needs sub-ROM budget audit + sample extraction.
+
 ### Removed
 - `BONUS_LIFE_EVERY` define + `g_bonus_life_pending` flag (superseded by the 10k-threshold mechanic).
 

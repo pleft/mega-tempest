@@ -305,6 +305,12 @@ static u32 g_score_next_life;
 /* Wave-completion bonus computed in next_wave() and displayed as
  * "BONUS NNNNNN" on the WAVE-GET-READY splash for the cleared wave. */
 static u32 g_wave_clear_bonus;
+/* Deaths-this-wave counter. Reset to 0 in install_playfield (wave 1)
+ * and next_wave(); bumped on every player death. The EXCELLENT splash
+ * only fires when this is 0 at wave clear, matching the Jaguar's
+ * intent (EXCELLENT was reserved for warp / bonus-stage clears, which
+ * imply skillful play). */
+static u8  g_wave_deaths;
 
 /* Jaguar per-enemy point values (yak.s:22772-22785 via the doscore
  * dispatch table). Tanker break itself awards 0 — the spawned children
@@ -785,6 +791,7 @@ static void next_wave(void)
   u32 bonus = 2600ul + 200ul * L + L * L * L;
   g_wave_clear_bonus = bonus;
   award_score(bonus);
+  g_wave_deaths = 0;                            /* fresh count for the next wave */
   /* Older every-4-waves bonus-life replaced by the 10k threshold
    * inside award_score(). The "1UP!" splash line is no longer fired
    * here — extra lives just appear in the HUD as the score crosses
@@ -930,6 +937,7 @@ static void install_playfield(void)
   g_score = 0;
   g_score_next_life = 10000ul;       /* first bonus life at 10 000 points */
   g_wave_clear_bonus = 0;
+  g_wave_deaths = 0;
   g_lives = LIVES_START;
   g_respawn_timer = 0;
   for (u8 k = 0; k < MAX_LANES; ++k) { g_spike_depth[k] = 0; g_spike_flash[k] = 0; }
@@ -1298,6 +1306,7 @@ static void play_gated_vblank(void)
     g_death_y = web_pixel_y(g_player_lane, FP_ONE);
     spawn_debris_burst();
     g_respawn_timer = RESPAWN_DELAY;
+    g_wave_deaths++;
 #if !INFINITE_LIVES
     if (g_lives) g_lives--;
 #endif
@@ -1330,6 +1339,7 @@ static void play_gated_vblank(void)
         spawn_debris_burst();
         kill_enemy(f);
         g_respawn_timer = RESPAWN_DELAY;       /* freeze + hide player */
+        g_wave_deaths++;
 #if !INFINITE_LIVES
         if (g_lives) g_lives--;
 #endif
@@ -1522,6 +1532,26 @@ static void play_main_thread(void)
     print("SZ:",    plane_xy(11, 27));     /* +1 col: spacer after LIVES digit */
     print("WAVE:",  plane_xy(16, 27));     /* +1 col: spacer after SZ digit    */
     g_scene_dirty = 0;
+  }
+
+  /* "EXCELLENT!" wave-clear flourish — adapted from the Jag, where it
+   * accompanies warp / bonus-stage clears (yak.s:4193, 4703). We don't
+   * have warps or bonus stages yet, so the closest faithful trigger is
+   * "wave cleared without dying" — reserves the flourish for skillful
+   * runs instead of cheapening it on every clear. Sits on screen for
+   * the 1 s wave-clear hold before the fly-down-tube transition.
+   * (Voice sample at two pitches is parked for v0.4 — sub-ROM budget
+   * + sfx extract.) */
+  {
+    static u8 prev_clear = 0;
+    u8 cur_clear = (g_wave_clear_timer > 0 && g_wave_deaths == 0) ? 1 : 0;
+    if (cur_clear && !prev_clear) {
+      print("EXCELLENT!", plane_xy(15, 14));
+    }
+    if (!cur_clear && prev_clear) {
+      print("          ", plane_xy(15, 14));
+    }
+    prev_clear = cur_clear;
   }
 
   /* Wave-start splash. Painted once on rising edge of g_splash_timer,
