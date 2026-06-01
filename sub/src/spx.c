@@ -258,25 +258,43 @@ static void stream_tick_channel(uint8_t channel)
    * $FF so the chip hits end-of-sample as soon as it crosses our
    * stop point; then write $FF at ring[0] so the chip's loop wrap
    * (loop_start = ring_base) immediately re-triggers end-of-sample
-   * and the channel stays silent. */
+   * and the channel stays silent.
+   *
+   * IMPORTANT: ff_buf and stop are STACK-allocated and initialised
+   * each call — megadev's sub runtime does NOT init .data or zero
+   * .bss, so a `static` buffer would contain garbage on real silicon
+   * (we'd write garbage into the ring → audible "echo" — exactly the
+   * bug that survived the first attempt at this fix). See
+   * feedback_megadev_sub_c_runtime.md. */
   if (c->src_pos >= c->src_len) {
     if (!c->eos) {
+      /* Blanket the ENTIRE ring with $FF, not just from c->ring_pos
+       * forward. v0.2-beta tried the "forward-only" fill and it
+       * persisted the "lay lay lay" echo on real silicon: if the
+       * chip's hardware read pointer happens to be AHEAD of
+       * c->ring_pos when src exhausts (chip-overrun race — the
+       * write loop lags the chip by 1 tick at worst), the chip
+       * continues reading stale bytes ahead, hits no $FF in our
+       * forward-only fill, wraps to ring_base and re-plays the
+       * end-of-sample chunk that lives at ring[0..ring_pos-1].
+       * Filling [0..STREAM_USABLE_SIZE-1] makes every readable
+       * position a wrap trigger; the loop_start register (ring_base
+       * + 0) is also $FF so the wrap target is silent.
+       *
+       * Cost: ~4 KB of pcm_cpy = ~5 ms inside the 50 Hz tick — once
+       * per stream end, so the IRQ budget absorbs it. Stack-init
+       * because the sub runtime won't initialise .data / .bss (the
+       * lesson from feedback_megadev_sub_c_runtime.md). */
       uint16_t ring_base = channel_ring_offset(channel);
-      static uint8_t ff_buf[64];
-      static uint8_t ff_init = 0;
-      if (!ff_init) {
-        for (uint16_t i = 0; i < 64; i++) ff_buf[i] = 0xFF;
-        ff_init = 1;
-      }
-      uint16_t pos = c->ring_pos;
+      uint8_t  ff_buf[64];
+      for (uint8_t i = 0; i < 64; i++) ff_buf[i] = 0xFF;
+      uint16_t pos = 0;
       while (pos < STREAM_USABLE_SIZE) {
         uint16_t chunk = (uint16_t) (STREAM_USABLE_SIZE - pos);
         if (chunk > 64) chunk = 64;
         pcm_cpy(ring_base + pos, ff_buf, chunk, 0);
         pos += chunk;
       }
-      static const uint8_t stop_byte = 0xFF;
-      pcm_cpy(ring_base + 0, (void *) &stop_byte, 1, 0);
       c->eos = 1;
     }
     return;

@@ -8,7 +8,7 @@ No CD-ROM disc required. Just a Mega Drive + Mega CD attached.
 
 ▶ **[Watch the demo on YouTube](https://www.youtube.com/watch?v=EKqgXYvCzAo)** — gameplay captured on real Mega Drive + Mega CD hardware.
 
-> **Status: v0.2-beta (released 2026-06-01).** Adds enemy variants (fuse-tanker, pulsar-tanker, super-flipper) and a 10-entry Hall of Fame on the title screen with post-game-over initials entry. Verified working on **real Mega Drive + Mega CD hardware** + [ares](https://ares-emu.net/); BlastEm has known Mode 1 quirks. See [CHANGELOG](CHANGELOG.md) for what shipped in each version and [Known limitations](#known-limitations) below.
+> **Status: v0.2.1-beta (released 2026-06-01).** Patch release on top of v0.2-beta with the real fix for the rave4 voice-sample echo on real hardware (the v0.2 attempt only handled half the failure mode). v0.2's headline content — enemy variants (fuse-tanker, pulsar-tanker, super-flipper) and a 10-entry Hall of Fame — is unchanged. Verified working on **real Mega Drive + Mega CD hardware** + [ares](https://ares-emu.net/); BlastEm has known Mode 1 quirks. See [CHANGELOG](CHANGELOG.md) for what shipped in each version and [Known limitations](#known-limitations) below.
 
 ---
 
@@ -87,7 +87,7 @@ For a port of Tempest 2000 — a 60 Hz vector-3D shooter with full MOD-tracker m
 
 ## Known limitations
 
-This list reflects the current v0.2-beta release. The core gameplay loop is complete and stable; the following are known and intentional gaps:
+This list reflects the current v0.2.1-beta release. The core gameplay loop is complete and stable; the following are known and intentional gaps:
 
 - **Loops at wave 16.** The Jag original has 99 levels with bonus stages and a warp mechanic between them. The port currently cycles the 16 wave definitions endlessly with escalating difficulty. Bonus stages + the level-99 victory + Beastly NG+ mode are scoped but not implemented.
 - **Hi-score table is session-only.** Backup-RAM persistence between power cycles is a v0.3 item — the Mode 1 cart's bootstrap doesn't initialise the BIOS state that the BURAM calls need, so saves currently hang. Table + qualifying detection + initials entry all work in-session.
@@ -138,10 +138,10 @@ Sub CPU module (`sub/spx.smd`) builds first, then the cart links the sub binary 
 
 ## Run
 
-Grab `mega-tempest-v0.2-beta.bin` from the [releases page](https://github.com/pleft/mega-tempest/releases) (or build from source) and load it in an emulator that supports Mega CD Mode 1 cart booting. **[ares](https://ares-emu.net/)** is recommended — accurate Sub CPU + Word RAM + ASIC. BlastEm has known quirks with Mode 1 Sub-CPU WR ownership.
+Grab `mega-tempest-v0.2.1-beta.bin` from the [releases page](https://github.com/pleft/mega-tempest/releases) (or build from source) and load it in an emulator that supports Mega CD Mode 1 cart booting. **[ares](https://ares-emu.net/)** is recommended — accurate Sub CPU + Word RAM + ASIC. BlastEm has known quirks with Mode 1 Sub-CPU WR ownership.
 
 ```
-ares mega-tempest-v0.2-beta.bin
+ares mega-tempest-v0.2.1-beta.bin
 ```
 
 On real hardware: flash to a flashcart that supports Mode 1, attach to a Mega CD, boot.

@@ -6,7 +6,7 @@
 set -euo pipefail
 
 # Bump on each tagged release. Matches the git tag suffix (without `v`).
-VERSION="v0.2-beta"
+VERSION="v0.2.1-beta"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 if [ ! -d "$HERE/../megadev" ]; then

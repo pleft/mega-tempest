@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 _Nothing yet._
 
+## [0.2.1-beta] — 2026-06-01
+
+### Fixed
+- **rave4 "Play"-voice echo on real hardware (real fix)**. The v0.2-beta attempt at this only filled the streaming ring from the write pointer forward, which assumed the chip's read pointer was *behind* the write pointer. On real silicon the chip can overrun the write pointer by a tick under certain pitches, leaving the chip reading stale end-of-sample bytes BEHIND the fill point and re-playing them on each loop-wrap (audible as "lay lay lay" looping the last syllable of "Play"). v0.2.1 blankets the *entire* ring with `$FF` on end-of-source so no matter where the chip is, the next byte read triggers a wrap to ring_start (also `$FF`) → silent infinite loop. Confirmed silent on real Mega Drive + Mega CD. (Builds on `f58c723` from v0.1-beta and the stack-init fix from v0.2-beta.)
+
 ## [0.2-beta] — 2026-06-01
 
 ### Added
@@ -48,6 +53,7 @@ First public release. Tagged at commit `b95ccb4`; verified working on real Mega 
 - PAL timing untested
 - BlastEm has Mode 1 Sub-CPU / Word-RAM issues — use ares
 
-[Unreleased]: https://github.com/pleft/mega-tempest/compare/v0.2-beta...HEAD
+[Unreleased]: https://github.com/pleft/mega-tempest/compare/v0.2.1-beta...HEAD
+[0.2.1-beta]: https://github.com/pleft/mega-tempest/releases/tag/v0.2.1-beta
 [0.2-beta]: https://github.com/pleft/mega-tempest/releases/tag/v0.2-beta
 [0.1-beta]: https://github.com/pleft/mega-tempest/releases/tag/v0.1-beta
