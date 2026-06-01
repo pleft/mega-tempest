@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # Build wrapper for the Tempest 2000 Mega CD Mode 1 cart.
 # Builds the Sub CPU module first (spx.smd) then the cart, patches the
-# 'C' device-support flag at offset $191.
+# 'C' device-support flag at offset $191, and copies the result to
+# ../mega-tempest-${VERSION}.bin so binaries are unambiguous to share.
 set -euo pipefail
+
+# Bump on each tagged release. Matches the git tag suffix (without `v`).
+VERSION="v0.2-beta"
+
 HERE="$(cd "$(dirname "$0")" && pwd)"
 if [ ! -d "$HERE/../megadev" ]; then
   echo "error: ../megadev not found." >&2
@@ -70,5 +75,6 @@ else:
     print('device flag already set')
 "
 
-cp "$ROM" "$HERE/../mega-tempest.bin"
-echo "built: $HERE/../mega-tempest.bin"
+OUT="$HERE/../mega-tempest-${VERSION}.bin"
+cp "$ROM" "$OUT"
+echo "built: $OUT"
