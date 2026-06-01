@@ -4,9 +4,9 @@ All notable changes to **MEGA TEMPEST** are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project loosely follows [Semantic Versioning](https://semver.org/), pre-1.0.
 
-## [Unreleased]
+## [Unreleased] — v0.3-beta (in development)
 
-_Nothing yet._
+_Coming soon._
 
 ## [0.2.1-beta] — 2026-06-01
 
