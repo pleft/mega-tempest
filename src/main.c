@@ -1923,7 +1923,10 @@ void main(void)
    * priority=1. No boot-time paint needed. */
 
   g_mcd_present = detect_mega_cd();
-  if (g_mcd_present) mcd_init();
+  if (g_mcd_present) {
+    mcd_init();
+    mcd_upload_sfx_bank();             /* SFX byte bank + metadata table → PRG-RAM */
+  }
   g_music_playing = 0;
 
   /* Load default hi-score table into RAM. BRAM persistence is parked

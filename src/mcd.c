@@ -1,5 +1,6 @@
 #include "mcd.h"
 #include "res.h"
+#include "sfx_data.h"         /* SFX_BANK, SFX_PRG_BASE, SFX_META_PRG */
 #include "web.h"             /* g_web_buf + web_render_main */
 #include <main/gate_arr.def.h>
 #include <main/memmap.h>
@@ -42,7 +43,10 @@ u8 detect_mega_cd(void)
   return disk_bit_clear || sega_at_400100 || gate_writable;
 }
 
-// Once at boot: load spx.smd into sub-side $10000 with reset vectors at $0.
+// Once at boot: load spx.smd into sub-side $14000 with reset vectors at $0.
+// MODULE_ROM relocated from $10000 to $14000 (see sub/src/spx_layout.s) to
+// free $01100-$13FFF (~75 KB) for the cart-side SFX bank uploaded by
+// mcd_upload_sfx_bank() below.
 void mcd_init(void)
 {
   *GA_REG_MEMMODE_W = 0xff00;
@@ -52,8 +56,33 @@ void mcd_init(void)
   sub_request_bus();
   *GA_REG_MEMMODE_W = 0x0000;
   ((volatile u32 *) PRG_RAM_WINDOW)[0] = 0x00080000;  // SP
-  ((volatile u32 *) PRG_RAM_WINDOW)[1] = 0x00010000;  // PC = spx main
-  copy_words(res_spx.data, (volatile u16 *) 0x430000, res_spx.size);
+  ((volatile u32 *) PRG_RAM_WINDOW)[1] = 0x00014000;  // PC = spx main @ MODULE_ROM_ORIGIN
+  copy_words(res_spx.data, (volatile u16 *) 0x434000, res_spx.size);
+  sub_release_and_run();
+}
+
+/* Once at boot, after mcd_init: copy the SFX byte blob to PRG-RAM at
+ * SFX_PRG_BASE and the metadata table to SFX_META_PRG. Sub-side
+ * sfx_play dereferences both directly (no init handshake needed —
+ * cart guarantees this runs before any CMD_PLAY_SFX is sent).
+ *
+ * Bank 0 of the PRG-RAM window covers sub addresses $0-$1FFFF, so the
+ * window at $420000 + sub_offset reaches both regions in one bank
+ * select. */
+void mcd_upload_sfx_bank(void)
+{
+  sub_request_bus();
+  *GA_REG_MEMMODE_W = (0 << 6);                         /* bank 0 */
+  /* SFX bytes → sub-side SFX_PRG_BASE. */
+  copy_words(res_sfx_data.data,
+             (volatile u16 *) (0x420000u + SFX_PRG_BASE),
+             res_sfx_data.size);
+  /* Metadata table (SFX_BANK[]) → sub-side SFX_META_PRG. SfxEntry is
+   * three u16 = 6 bytes; SFX_COUNT entries = SFX_COUNT*6 bytes. */
+  copy_words((const char *) SFX_BANK,
+             (volatile u16 *) (0x420000u + SFX_META_PRG),
+             (u32) (SFX_COUNT * sizeof(SfxEntry)));
+  *GA_REG_MEMMODE_W = 0x0000;
   sub_release_and_run();
 }
 

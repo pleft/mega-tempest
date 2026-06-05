@@ -19,6 +19,10 @@ extern DataChunk const res_tune5_mod;
 extern DataChunk const res_tune12_mod;
 extern DataChunk const res_tune13_mod;
 
+/* SFX byte blob — see tools/extract_sfx.py and src/sfx_data.h.
+ * Uploaded to PRG-RAM at boot by mcd_upload_sfx_bank. */
+extern DataChunk const res_sfx_data;
+
 /* MC-T16 ASIC test resources. */
 extern DataChunk const res_stamp01;
 extern DataChunk const res_stamp02;

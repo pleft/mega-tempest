@@ -20,7 +20,8 @@
 #include "memfile.h"
 #include "module.h"
 #include "pcm.h"
-#include "sfx_data.h"
+/* sfx_data.h gone — SFX bytes + metadata live in PRG-RAM, uploaded
+ * by the cart at boot. See sfx_play() below for the PRG-RAM layout. */
 
 // Inline the sub-side gate-array comm registers we need. We avoid
 // megadev's <sub/gate_arr.h> because it pulls in megadev's types.h,
@@ -677,25 +678,26 @@ static void render_warp(void)
  * sample and just fits in this slot. */
 #define SFX_BANK       0x60          /* PCM offset $6000 */
 
-/* Table mapping SFX index → (data, length, period). Order must match
- * the caller's constants (0=FIRE, 1=HIT, 2=DEATH, 3=ZAP, 4=EXC).
- * period: RF5C164 sample-rate divisor. 428 ≈ 8363 Hz (the MOD music
- * baseline). The Jag voice samples are recorded at ~19 kHz so the
- * EXCELLENT clip needs a lower period (188 ≈ 19000 Hz) — without it
- * the voice plays in slow motion ~2.3× too slow and is unrecognisable. */
-typedef struct { const uint8_t * data; uint16_t len; uint16_t period; } sfx_entry_t;
-static const sfx_entry_t SFX_TABLE[5] = {
-  { SFX_FIRE,  sizeof SFX_FIRE,  428 },
-  { SFX_HIT,   sizeof SFX_HIT,   428 },
-  { SFX_DEATH, sizeof SFX_DEATH, 428 },
-  { SFX_ZAP,   sizeof SFX_ZAP,   428 },
-  { SFX_EXC,   sizeof SFX_EXC,   188 },     /* "Excellent!" voice — Jag sfx 21 @ 19 kHz */
-};
+/* SFX bytes + metadata live in PRG-RAM (uploaded by the cart at boot
+ * via mcd_upload_sfx_bank). The sub dereferences both directly — no
+ * baked-in samples in the sub binary, so MODULE_ROM no longer caps
+ * the SFX bank size. Layout must match src/sfx_data.h:
+ *   $01100-$13FFF  SFX byte blob (~75 KB max with current layout)
+ *   $0F000-$0F0FF  SfxEntry table (offset, length, period per SFX) */
+#define SFX_PRG_BASE  0x01100u
+#define SFX_META_PRG  0x0F000u
+#define SFX_COUNT_MAX 32                    /* cart writes <= this many */
+
+typedef struct { uint16_t offset; uint16_t length; uint16_t period; } SfxEntry;
 
 static void sfx_play(uint8_t idx)
 {
-  if (idx >= 5) return;
-  const sfx_entry_t * e = &SFX_TABLE[idx];
+  if (idx >= SFX_COUNT_MAX) return;
+  const SfxEntry * e = &((const SfxEntry *) SFX_META_PRG)[idx];
+  const uint8_t  * data   = (const uint8_t *) ((uint32_t) SFX_PRG_BASE + e->offset);
+  uint16_t         length = e->length;
+  uint16_t         period = e->period;
+  if (length == 0) return;                  /* metadata not initialised */
 
   /* MASK INTERRUPTS for the entire sfx_play. mod_tick (50 Hz timer)
    * stomps PCM_CTRL when it fires — if that happens mid-pcm_cpy, the
@@ -720,8 +722,8 @@ static void sfx_play(uint8_t idx)
    * that's silent. Pointing AT the $FF (which I tried first) doesn't
    * stop the chip on this chip — gives audible echoes. */
   uint16_t base = (uint16_t) (SFX_BANK << 8);
-  pcm_cpy(base, (void *) e->data, e->len, 0);
-  uint16_t loop_off = (uint16_t) (base + e->len - 32 - 1);
+  pcm_cpy(base, (void *) data, length, 0);
+  uint16_t loop_off = (uint16_t) (base + length - 32 - 1);
 
   pcm_set_ctrl((uint8_t) (0xC0 | SFX_CHANNEL));     /* chip on + select ch */
   pcm_set_start(SFX_BANK, 0);
@@ -729,7 +731,7 @@ static void sfx_play(uint8_t idx)
   pcm_set_env(0xFF);                                 /* max volume */
   *((volatile uint8_t *) 0xFF0003) = 0xFF;          /* L=F, R=F (centre loud) */
   pcm_delay();
-  pcm_set_period(e->period);                         /* per-SFX rate (see SFX_TABLE) */
+  pcm_set_period(period);                            /* per-SFX rate (PRG-RAM metadata) */
   pcm_set_on(SFX_CHANNEL);
 
   asm volatile("move.w #0x2000, %sr");

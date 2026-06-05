@@ -17,8 +17,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - **EXCELLENT! splash** on a no-deaths wave clear. Centred text overlay during the 1 s wave-clear hold before the fly-down-tube transition.
   *Adapted trigger*: the Jag's EXCELLENT (yak.s:4193, 4703) only fires on **warp-tunnel** or **bonus-stage** completions, which require the warp mechanic + the 3 bonus-level game scenes we haven't ported yet. Our closest faithful trigger is "wave cleared without dying" — keeps the flourish meaningful instead of cheapening it on every wave. When the warp / bonus-stage scenes land (v0.4+), revisit this trigger to match the Jag exactly. Audio (voice sample SFX #21 at two pitches) is also pending — needs sub-ROM budget audit + sample extraction.
 
+### Changed (SFX architecture)
+- **SFX byte bank moved from sub binary → cart ROM + PRG-RAM**. The sub used to bake all SFX bytes into its `spx.smd` binary inside the 56 KB `MODULE_ROM` region, so adding a new SFX always meant trimming an existing one. Now the cart `.incbin`s the bank as `res_sfx_data` and `mcd_upload_sfx_bank()` copies it to PRG-RAM at boot (`$01100`) along with a metadata table (`$0F000`); the sub dereferences both directly at `sfx_play` time. Removing SFX from the sub binary shrank it from ~57 KB → **~11 KB**.
+- **MODULE_ROM relocated** from `$10000-$1DFFF` (56 KB) to `$14000-$1DFFF` (40 KB). The freed `$01100-$13FFF` region (~75 KB) is now the SFX bank, large enough to hold all current SFX at full Jag-original sizes with headroom for ~10 more.
+- **DEATH / ZAP / EXC restored to full Jag-original sizes** — previously trimmed (12 KB / 7 KB / 13.5 KB) to fit the old 56 KB bank, now stored at 21 KB / 17 KB / 23 KB. DEATH plays its full crash decay; ZAP plays the full Crackle; EXC plays the trailing reverb of "Excellent!" instead of cutting off after the "t".
+
 ### Removed
 - `BONUS_LIFE_EVERY` define + `g_bonus_life_pending` flag (superseded by the 10k-threshold mechanic).
+- Sub-side `sub/src/sfx_data.{c,h}` (and its `sfx_data.c` entry in the sub Makefile). SFX bytes live in the cart now.
 
 ## [0.2.1-beta] — 2026-06-01
 

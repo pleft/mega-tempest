@@ -39,5 +39,6 @@ $(PROJECT_ID).cart: \
 	web.c \
 	sprites.c \
 	hiscore.c \
+	sfx_data.c \
 	mulsi3.s \
 	res.s

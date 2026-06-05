@@ -10,6 +10,7 @@
 
 u8   detect_mega_cd(void);
 void mcd_init(void);                                /* once at boot, only if MCD present */
+void mcd_upload_sfx_bank(void);                     /* once at boot, after mcd_init */
 void mcd_upload_mod(DataChunk const * mod);
 void mcd_play_mod(u32 size);
 void mcd_stop_mod(void);

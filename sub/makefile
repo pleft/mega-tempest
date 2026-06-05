@@ -45,6 +45,5 @@ disc/spx.smd: \
 	module.c \
 	pcm.c \
 	pcm-io.s \
-	sfx_data.c \
 	mulsi3.s \
 	$(BUILD_PATH)/sp.bin
