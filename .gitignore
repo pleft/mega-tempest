@@ -16,3 +16,17 @@ prog_ram_*.bin
 # Tool-emitted debug artifacts
 /tools/sfx_previews/
 /res/*.mod.samples/
+
+# Tempest 2000 game assets — NOT redistributed here. Fetched from
+# mwenge/tempest2k and converted by fetch_assets.sh at build time.
+/res/rave4.mod
+/res/tune5.mod
+/res/tune7.mod
+/res/tune12.mod
+/res/tune13.mod
+/res/tempest_font.md.chr
+/res/sfx_data.bin
+/src/sprites.c
+/src/sprites.h
+/src/sfx_data.c
+/src/sfx_data.h
