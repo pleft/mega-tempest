@@ -23,12 +23,4 @@ extern DataChunk const res_tune13_mod;
  * Uploaded to PRG-RAM at boot by mcd_upload_sfx_bank. */
 extern DataChunk const res_sfx_data;
 
-/* MC-T16 ASIC test resources. */
-extern DataChunk const res_stamp01;
-extern DataChunk const res_stamp02;
-extern DataChunk const res_stamp03;
-extern DataChunk const res_stamp04;
-extern DataChunk const res_stamp_map;
-extern u16 const res_stamps_pal[16];
-
 #endif

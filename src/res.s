@@ -31,14 +31,3 @@ FILE "tune13.mod", res_tune13_mod
 // at SFX_PRG_BASE so the sub can play SFX without baking them into
 // the sub binary (frees MODULE_ROM, removes the 56 KB SFX ceiling).
 FILE "sfx_data.bin", res_sfx_data
-
-// ASIC test stamps (32x32, 16 colors) — backported from /asic-test/
-// for MC-T16 revival. Sega character closeups from megadev transforms.
-FILE "stamp01.md.chr", res_stamp01
-FILE "stamp02.md.chr", res_stamp02
-FILE "stamp03.md.chr", res_stamp03
-FILE "stamp04.md.chr", res_stamp04
-FILE "stampmap.bin",   res_stamp_map
-
-GLABEL res_stamps_pal
-.incbin "stamps.md.pal"

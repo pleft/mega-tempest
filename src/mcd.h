@@ -33,9 +33,6 @@ void mcd_render_asic_tilt(u16 plane_vram_addr, u16 tile_base,
  * have loaded stamps + painted plane B for the ASIC IMG layout. */
 void mcd_render_asic_scale(u16 plane_vram_addr, u16 tile_base,
                            u8 plane_x, u8 plane_y, s16 dx);
-/* Copy the demo Sega-character stamps + stamp map to WR. */
-void mcd_asic_load_stamps(void);
-
 /* Generate a Tempest-styled 32x32 stamp (yellow lane outline + blue
  * lane-gradient fill) directly into WR. Fills the stamp map with that
  * single stamp repeating. Uses the game's CRAM indices so the output

@@ -205,17 +205,6 @@ static u8 grant_2m_main_to(u32 t) {
 #define WR_STAMP_MAP     (WR_MAIN + 0x10000)
 #define WR_IMG_BUF       (WR_MAIN + 0x30000)
 
-void mcd_asic_load_stamps(void)
-{
-  wait_2m_main_to(0x80000);
-  /* Stamp slot 0 is unused (engine treats as transparent). Slots 1..4. */
-  copy_words(res_stamp01.data, (volatile u16 *) (WR_MAIN + 0x00200), res_stamp01.size);
-  copy_words(res_stamp02.data, (volatile u16 *) (WR_MAIN + 0x00400), res_stamp02.size);
-  copy_words(res_stamp03.data, (volatile u16 *) (WR_MAIN + 0x00600), res_stamp03.size);
-  copy_words(res_stamp04.data, (volatile u16 *) (WR_MAIN + 0x00800), res_stamp04.size);
-  copy_words(res_stamp_map.data, (volatile u16 *) WR_STAMP_MAP, res_stamp_map.size);
-}
-
 /* Build a Tempest-styled 32x32 "web cell" stamp directly in WR.
  * Layout: black inside, blue gradient band along outer edges (palette
  * 5..8 darkest→brightest), yellow (4) corner/centre marks. Designed so
