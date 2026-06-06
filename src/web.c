@@ -947,6 +947,19 @@ void render_sprites(void)
     emit_sprite_depth(spr_buf, n++, &sz, px, py, e->depth_fp);
   }
 
+  /* Pass 5b: PULSAR SPARKS — small rim-walkers. Use the pulsar's
+   * near-tier sprite (always at the rim) animated in sync with parent
+   * pulsars so the swarm looks coherent. */
+  for (Entity * e = g_active_head; e; e = e->next) {
+    if (e->type != E_PULSAR_SPARK || n >= SPR_MAX) continue;
+    s16 px = web_pixel_x(e->lane, FP_ONE);
+    s16 py = web_pixel_y(e->lane, FP_ONE);
+    SpriteSizeDef sz = { SPR_SIZE_1x1,
+                         (u16) (PULSAR_TILE_BASE + 2 * 3 + pulsar_frame),
+                         4 };
+    emit_sprite_depth(spr_buf, n++, &sz, px, py, FP_ONE);
+  }
+
   /* Pass 6: FUSEBALLS — 3 depth tiers × 2 leg frames. Cycle ~8 fps. */
   u8 const fuseball_frame = (u8) ((g_anim_frame >> 3) & 0x1);
   for (Entity * e = g_active_head; e; e = e->next) {

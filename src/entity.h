@@ -67,6 +67,17 @@ typedef enum {
                     // 2). Spawned probabilistically from the flipper
                     // pool from wave 6+. Same field semantics as
                     // E_FLIPPER throughout the tick + collision paths.
+  E_PULSAR_SPARK = 13,  // Spawned by a pulsar when it reaches the rim
+                    // (one going left, one going right). Walks the rim
+                    // every PSPARK_HOP_PERIOD ticks; kills player on
+                    // same-lane rim contact; killable by shot (flipper
+                    // score). Field reuse:
+                    //   lane          = current rim lane
+                    //   depth_fp      = FP_ONE (always at rim)
+                    //   phase         = direction (0 = left, 1 = right)
+                    //   step_period   = ticks until next lane hop
+                    //   lifetime      = u8 countdown — auto-despawn so
+                    //                   sparks don't circle forever
 } EntityType;
 
 struct Entity {

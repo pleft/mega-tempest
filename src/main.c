@@ -469,6 +469,8 @@ static u8 g_zap_flash;
 #define PULSAR_OUT_STEP    (FP_ONE >> 8)   // 256 ticks centre->rim (~4.3 sec) — same as flipper
 #define FUSEBALL_STEP      (FP_ONE >> 9)   // slower base velocity (it flips direction often)
 #define FUSEBALL_HOP_PERIOD 30             // ticks between random direction/lane changes
+#define PSPARK_HOP_PERIOD    4             // Jag prop_del high byte = 0x04 (yak.s:23983)
+#define PSPARK_LIFETIME    240             // 4 s @ 60 Hz — sparks don't circle forever
 #define SPIKER_OUT_STEP    (FP_ONE >> 7)   // ~2 sec rim — fast painter
 #define SPIKE_CUT_AMOUNT   (FP_ONE >> 2)   // shot trims this much off a spike's tip
 #define SPIKE_KILL_THRESH  (FP_ONE - HIT_DEPTH_TOL)  /* spike-at-rim kills player */
@@ -594,6 +596,22 @@ static void spawn_pulsar_at(u8 lane, fp16 depth_fp)
 
 static void spawn_pulsar(u8 lane) { spawn_pulsar_at(lane, 0); }
 
+/* Pulsar spark — spawned by a pulsar when it reaches the rim. Walks
+ * the rim in `direction` (0=left, 1=right) until its lifetime expires. */
+static void spawn_pulsar_spark(u8 lane, u8 direction)
+{
+  Entity * e = entity_spawn();
+  if (!e) return;
+  e->type         = E_PULSAR_SPARK;
+  e->lane         = lane;
+  e->depth_fp     = FP_ONE;
+  e->depth_vel_fp = 0;
+  e->phase        = direction;
+  e->step_period  = PSPARK_HOP_PERIOD;
+  e->lifetime     = PSPARK_LIFETIME;
+  g_enemy_count++;
+}
+
 static void spawn_fuseball_at(u8 lane, fp16 depth_fp)
 {
   Entity * e = entity_spawn();
@@ -700,7 +718,8 @@ static void trigger_superzapper(void)
     Entity * next = e->next;
     if (e->type == E_FLIPPER || e->type == E_SUPER_FLIPPER ||
         e->type == E_TANKER  || e->type == E_PULSAR  ||
-        e->type == E_FUSEBALL || e->type == E_SPIKER) {
+        e->type == E_FUSEBALL || e->type == E_SPIKER ||
+        e->type == E_PULSAR_SPARK) {
       /* Spawn a zapspark at this enemy's lane+depth before killing. */
       Entity * s = entity_spawn();
       if (s) {
@@ -774,6 +793,7 @@ static void next_wave(void)
     if (e->type == E_FLIPPER || e->type == E_SUPER_FLIPPER ||
         e->type == E_TANKER  || e->type == E_PULSAR  ||
         e->type == E_FUSEBALL || e->type == E_SPIKER  ||
+        e->type == E_PULSAR_SPARK ||
         e->type == E_DEBRIS) {
       entity_kill(e);
     }
@@ -1137,14 +1157,31 @@ static void play_gated_vblank(void)
     } else if (e->type == E_PULSAR) {
       /* Same as tanker — descend, then sit at rim (phase 1). Kill check
        * is gated on the pulse animation peak so the player has a brief
-       * safe window each cycle. */
+       * safe window each cycle. On the rim-arrival transition, spawn
+       * two pulsar sparks (one going each way around the rim) — Jag
+       * yak.s:12546-12568. */
       if (e->phase == 0) {
         e->depth_fp += e->depth_vel_fp;
         if (e->depth_fp >= FP_ONE) {
           e->depth_fp     = FP_ONE;
           e->depth_vel_fp = 0;
           e->phase        = 1;
+          spawn_pulsar_spark(web_lane_left (e->lane), 0);   /* leftward  */
+          spawn_pulsar_spark(web_lane_right(e->lane), 1);   /* rightward */
         }
+      }
+    } else if (e->type == E_PULSAR_SPARK) {
+      /* Rim-walker. Hop one lane every PSPARK_HOP_PERIOD ticks in the
+       * direction stored in `phase`. web_lane_left/right handle the
+       * shape-specific wrap/clamp at lane edges. Auto-despawn after
+       * PSPARK_LIFETIME so sparks don't circle forever. */
+      if (e->lifetime == 0) { kill_enemy(e); e = next; continue; }
+      e->lifetime--;
+      if (e->step_period) e->step_period--;
+      if (e->step_period == 0) {
+        e->lane = (e->phase == 0) ? web_lane_left(e->lane)
+                                  : web_lane_right(e->lane);
+        e->step_period = PSPARK_HOP_PERIOD;
       }
     } else if (e->type == E_SPIKER) {
       /* Descend; paint the spike on this lane up to my current depth.
@@ -1199,7 +1236,8 @@ static void play_gated_vblank(void)
       for (Entity * en = g_active_head; en; en = en->next) {
         if (en->type == E_FLIPPER || en->type == E_SUPER_FLIPPER ||
             en->type == E_TANKER  || en->type == E_PULSAR  ||
-            en->type == E_FUSEBALL || en->type == E_SPIKER) {
+            en->type == E_FUSEBALL || en->type == E_SPIKER ||
+            en->type == E_PULSAR_SPARK) {
           if (en->depth_fp > best_depth) {
             best_depth  = en->depth_fp;
             target_lane = en->lane;
@@ -1251,7 +1289,8 @@ static void play_gated_vblank(void)
         Entity * f_next = f->next;
         if ((f->type == E_FLIPPER || f->type == E_SUPER_FLIPPER ||
              f->type == E_TANKER  || f->type == E_PULSAR  ||
-             f->type == E_FUSEBALL || f->type == E_SPIKER)
+             f->type == E_FUSEBALL || f->type == E_SPIKER ||
+             f->type == E_PULSAR_SPARK)
             && f->lane == s->lane) {
           fp16 d = s->depth_fp - f->depth_fp;
           if (d < 0) d = -d;
@@ -1265,6 +1304,7 @@ static void play_gated_vblank(void)
             else if (f->type == E_FUSEBALL)      { kill_enemy(f);   award_score(PTS_FUSEBALL);      }
             else if (f->type == E_SPIKER)        { kill_enemy(f);   award_score(PTS_SPIKER);        }
             else if (f->type == E_SUPER_FLIPPER) { kill_enemy(f);   award_score(PTS_SUPER_FLIPPER); }
+            else if (f->type == E_PULSAR_SPARK)  { kill_enemy(f);   award_score(PTS_FLIPPER);       }
             else                                 { kill_enemy(f);   award_score(PTS_FLIPPER);       }
             if (g_mcd_present) mcd_play_sfx(1);    /* 1 = HIT — PCM */
             else               sfx_hit();           /* PSG fallback */
@@ -1329,10 +1369,14 @@ static void play_gated_vblank(void)
        * 4-step ping-pong animation (PULSAR_FRAME_MAP[2] = 2). */
       u8 const pulse_step = (u8) ((g_anim_frame >> 4) & 0x3);
       u8 const pulse_peak = (pulse_step == 2);
-      if (((f->type == E_FLIPPER || f->type == E_SUPER_FLIPPER ||
-            f->type == E_TANKER  || f->type == E_FUSEBALL) ||
-           (f->type == E_PULSAR && pulse_peak)) &&
-          f->phase == 1 && f->lane == g_player_lane) {
+      /* Pulsar sparks kill on rim contact unconditionally (their `phase`
+       * field is direction, not a rim flag — they're always at the rim). */
+      u8 spark_hit = (f->type == E_PULSAR_SPARK && f->lane == g_player_lane);
+      if (spark_hit ||
+          (((f->type == E_FLIPPER || f->type == E_SUPER_FLIPPER ||
+             f->type == E_TANKER  || f->type == E_FUSEBALL) ||
+            (f->type == E_PULSAR && pulse_peak)) &&
+           f->phase == 1 && f->lane == g_player_lane)) {
         /* Snapshot claw's outer-rim screen position — the burst origin. */
         g_death_x = web_pixel_x(g_player_lane, FP_ONE);
         g_death_y = web_pixel_y(g_player_lane, FP_ONE);
