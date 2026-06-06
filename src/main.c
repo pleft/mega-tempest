@@ -323,6 +323,7 @@ static u8  g_wave_deaths;
 #define PTS_FUSEBALL       250u
 #define PTS_SPIKER         100u
 #define PTS_SPIKE_SEG      200u
+#define PTS_BEAST          600u   /* Jag doscore index 10 = $62 BCD = 600 (yak.s:22782) */
 #define PTS_POWERUP_PICKUP   5u   /* small "thanks for catching it" — not from Jag */
 
 /* Centralised score award — bumps g_score and runs the 10 000-point
@@ -345,32 +346,33 @@ typedef struct {
   u8  num_pulsars;
   u8  num_fuseballs;
   u8  num_spikers;
+  u8  num_beasts;       // mid-boss; Jag introduces at wave 10+
   u16 spawn_period;     // ticks between spawns (smaller = faster)
   u8  max_active;       // concurrent enemy cap
 } WaveDef;
 
 static const WaveDef WAVES[16] = {
-  /* flip tank puls fuse spik  period  max  | wave  shape  */
-  {   5,   0,   0,   0,   0,   150,    2 }, /*  W1   V       — gentle intro    */
-  {   8,   0,   0,   0,   0,   140,    3 }, /*  W2   SQUARE                    */
-  {   6,   2,   0,   0,   0,   130,    3 }, /*  W3   PLUS    — + tanker        */
-  {   8,   2,   1,   0,   0,   120,    3 }, /*  W4   TRIANG  — + pulsar        */
-  {   8,   2,   2,   1,   0,   120,    3 }, /*  W5   PENTA   — + fuseball      */
-  {   8,   3,   2,   1,   1,   110,    4 }, /*  W6   STAR    — + spiker        */
-  {  10,   3,   2,   2,   1,   100,    4 }, /*  W7   W                         */
-  {  10,   3,   3,   2,   1,    90,    4 }, /*  W8   FAN                       */
-  {  10,   4,   3,   2,   2,    90,    4 }, /*  W9   V (rep)                   */
-  {  12,   4,   3,   3,   2,    80,    5 }, /* W10                             */
-  {  12,   4,   4,   3,   2,    80,    5 }, /* W11                             */
-  {  12,   5,   4,   3,   3,    75,    5 }, /* W12                             */
-  {  14,   5,   4,   4,   3,    70,    5 }, /* W13                             */
-  {  14,   5,   5,   4,   3,    70,    5 }, /* W14                             */
-  {  16,   6,   5,   4,   4,    65,    6 }, /* W15                             */
-  {  16,   6,   5,   5,   4,    60,    6 }, /* W16   FAN     — final           */
+  /* flip tank puls fuse spik bst  period max  | wave  shape  */
+  {   5,   0,   0,   0,   0,  0,   150,    2 }, /*  W1   V       — gentle intro    */
+  {   8,   0,   0,   0,   0,  0,   140,    3 }, /*  W2   SQUARE                    */
+  {   6,   2,   0,   0,   0,  0,   130,    3 }, /*  W3   PLUS    — + tanker        */
+  {   8,   2,   1,   0,   0,  0,   120,    3 }, /*  W4   TRIANG  — + pulsar        */
+  {   8,   2,   2,   1,   0,  0,   120,    3 }, /*  W5   PENTA   — + fuseball      */
+  {   8,   3,   2,   1,   1,  0,   110,    4 }, /*  W6   STAR    — + spiker        */
+  {  10,   3,   2,   2,   1,  0,   100,    4 }, /*  W7   W                         */
+  {  10,   3,   3,   2,   1,  0,    90,    4 }, /*  W8   FAN                       */
+  {  10,   4,   3,   2,   2,  0,    90,    4 }, /*  W9   V (rep)                   */
+  {  12,   4,   3,   3,   2,  1,    80,    5 }, /* W10   — + beast                 */
+  {  12,   4,   4,   3,   2,  1,    80,    5 }, /* W11                             */
+  {  12,   5,   4,   3,   3,  2,    75,    5 }, /* W12                             */
+  {  14,   5,   4,   4,   3,  2,    70,    5 }, /* W13                             */
+  {  14,   5,   5,   4,   3,  2,    70,    5 }, /* W14                             */
+  {  16,   6,   5,   4,   4,  3,    65,    6 }, /* W15                             */
+  {  16,   6,   5,   5,   4,  3,    60,    6 }, /* W16   FAN     — final           */
 };
 
 static u16 g_wave_num;          // 0-indexed wave (wraps mod 16 for shape)
-static u8  g_pool[5];           // remaining-to-spawn: [flipper, tanker, pulsar, fuseball, spiker]
+static u8  g_pool[6];           // remaining-to-spawn: [flipper, tanker, pulsar, fuseball, spiker, beast]
 static u8  g_wave_clear_timer;  // counts up while wave-clear conditions hold
 #define WAVE_CLEAR_DELAY 60     // 1 sec of empty-web pause before zoom fires
 
@@ -455,6 +457,8 @@ static u8 g_zap_flash;
 #define POOL_PULSAR   2
 #define POOL_FUSEBALL 3
 #define POOL_SPIKER   4
+#define POOL_BEAST    5
+#define POOL_COUNT    6
 
 /* Debug switch — set to 1 to disable game-over (lives never decrement,
  * the player respawns indefinitely). Set to 0 for the actual game. */
@@ -471,6 +475,10 @@ static u8 g_zap_flash;
 #define FUSEBALL_HOP_PERIOD 30             // ticks between random direction/lane changes
 #define PSPARK_HOP_PERIOD    4             // Jag prop_del high byte = 0x04 (yak.s:23983)
 #define PSPARK_LIFETIME    240             // 4 s @ 60 Hz — sparks don't circle forever
+#define BEAST_OUT_STEP     (FP_ONE >> 9)   // slow — half of flipper (~8.5 s center→rim) so the mid-boss reads as a threat instead of a blip
+#define BEAST_FIRE_PERIOD  120             // ~2 s between shots (Jag a_firerate = $7070)
+#define BEAST_HP             2             // Jag: 2-hit kill (yak.s:10923)
+#define ESHOT_OUT_STEP     (FP_ONE >> 6)   // 4× flipper descent — bullet is fast
 #define SPIKER_OUT_STEP    (FP_ONE >> 7)   // ~2 sec rim — fast painter
 #define SPIKE_CUT_AMOUNT   (FP_ONE >> 2)   // shot trims this much off a spike's tip
 #define SPIKE_KILL_THRESH  (FP_ONE - HIT_DEPTH_TOL)  /* spike-at-rim kills player */
@@ -612,6 +620,38 @@ static void spawn_pulsar_spark(u8 lane, u8 direction)
   g_enemy_count++;
 }
 
+/* Beast — mid-boss flipper-class introduced at wave 10+. Descends like
+ * a flipper, fires E_ENEMY_SHOT periodically, takes 2 hits to kill. */
+static void spawn_beast(u8 lane)
+{
+  Entity * e = entity_spawn();
+  if (!e) return;
+  e->type         = E_BEAST;
+  e->lane         = lane;
+  e->depth_fp     = 0;
+  e->depth_vel_fp = +BEAST_OUT_STEP;
+  e->phase        = 0;
+  e->step_period  = BEAST_FIRE_PERIOD;
+  e->lifetime     = BEAST_HP;
+  g_enemy_count++;
+}
+
+/* Enemy shot — fired by a beast (and future shooters). Travels OUTWARD
+ * from beast's depth toward the rim. Kills the player on rim contact at
+ * the matching lane. Not counted as an enemy (g_enemy_count unchanged). */
+static void spawn_enemy_shot(u8 lane, fp16 depth_fp)
+{
+  Entity * e = entity_spawn();
+  if (!e) return;
+  e->type         = E_ENEMY_SHOT;
+  e->lane         = lane;
+  e->depth_fp     = depth_fp;
+  e->depth_vel_fp = +ESHOT_OUT_STEP;
+  e->phase        = 0;
+  e->step_period  = 0;
+  e->lifetime     = 0;
+}
+
 static void spawn_fuseball_at(u8 lane, fp16 depth_fp)
 {
   Entity * e = entity_spawn();
@@ -719,7 +759,7 @@ static void trigger_superzapper(void)
     if (e->type == E_FLIPPER || e->type == E_SUPER_FLIPPER ||
         e->type == E_TANKER  || e->type == E_PULSAR  ||
         e->type == E_FUSEBALL || e->type == E_SPIKER ||
-        e->type == E_PULSAR_SPARK) {
+        e->type == E_PULSAR_SPARK || e->type == E_BEAST) {
       /* Spawn a zapspark at this enemy's lane+depth before killing. */
       Entity * s = entity_spawn();
       if (s) {
@@ -745,7 +785,8 @@ static void trigger_superzapper(void)
 /* Total enemies remaining in the spawn pool. */
 static u16 pool_total(void)
 {
-  return (u16) (g_pool[0] + g_pool[1] + g_pool[2] + g_pool[3] + g_pool[4]);
+  return (u16) (g_pool[0] + g_pool[1] + g_pool[2] +
+                g_pool[3] + g_pool[4] + g_pool[5]);
 }
 
 /* Refill g_pool[] from WAVES[wave_idx] and set the wave's spawn period.
@@ -758,6 +799,7 @@ static void load_wave_pool(u16 wave_idx)
   g_pool[POOL_PULSAR]   = WAVES[t].num_pulsars;
   g_pool[POOL_FUSEBALL] = WAVES[t].num_fuseballs;
   g_pool[POOL_SPIKER]   = WAVES[t].num_spikers;
+  g_pool[POOL_BEAST]    = WAVES[t].num_beasts;
   g_spawn_timer = WAVES[t].spawn_period;
   g_superzapper_charges = SUPERZAPPER_PER_WAVE;
 }
@@ -793,7 +835,8 @@ static void next_wave(void)
     if (e->type == E_FLIPPER || e->type == E_SUPER_FLIPPER ||
         e->type == E_TANKER  || e->type == E_PULSAR  ||
         e->type == E_FUSEBALL || e->type == E_SPIKER  ||
-        e->type == E_PULSAR_SPARK ||
+        e->type == E_PULSAR_SPARK || e->type == E_BEAST ||
+        e->type == E_ENEMY_SHOT ||
         e->type == E_DEBRIS) {
       entity_kill(e);
     }
@@ -1102,9 +1145,9 @@ static void play_gated_vblank(void)
     while (lane >= lc) lane = (u8) (lane - lc);
     /* Pick a pool slot — random start, walk to first non-empty. */
     u8 start = (u8) (lcg() & 0x7);
-    for (u8 i = 0; i < 5; ++i) {
+    for (u8 i = 0; i < POOL_COUNT; ++i) {
       u8 slot = (u8) (start + i);
-      while (slot >= 5) slot = (u8) (slot - 5);
+      while (slot >= POOL_COUNT) slot = (u8) (slot - POOL_COUNT);
       if (g_pool[slot] == 0) continue;
       g_pool[slot]--;
       switch (slot) {
@@ -1113,6 +1156,7 @@ static void play_gated_vblank(void)
         case POOL_PULSAR:   spawn_pulsar(lane);   break;
         case POOL_FUSEBALL: spawn_fuseball(lane); break;
         case POOL_SPIKER:   spawn_spiker(lane);   break;
+        case POOL_BEAST:    spawn_beast(lane);    break;
       }
       break;
     }
@@ -1169,6 +1213,43 @@ static void play_gated_vblank(void)
           spawn_pulsar_spark(web_lane_left (e->lane), 0);   /* leftward  */
           spawn_pulsar_spark(web_lane_right(e->lane), 1);   /* rightward */
         }
+      }
+    } else if (e->type == E_BEAST) {
+      /* Descend like a flipper; fire E_ENEMY_SHOT every BEAST_FIRE_PERIOD
+       * ticks while still descending. On rim arrival, sit there and
+       * keep firing — kills player on contact like tanker. */
+      if (e->phase == 0) {
+        e->depth_fp += e->depth_vel_fp;
+        if (e->depth_fp >= FP_ONE) {
+          e->depth_fp     = FP_ONE;
+          e->depth_vel_fp = 0;
+          e->phase        = 1;
+        }
+      }
+      if (e->step_period) e->step_period--;
+      if (e->step_period == 0) {
+        spawn_enemy_shot(e->lane, e->depth_fp);
+        e->step_period = BEAST_FIRE_PERIOD;
+      }
+    } else if (e->type == E_ENEMY_SHOT) {
+      /* Travel outward. Kill the shot if it overshoots the rim, or kill
+       * the player if it reaches the rim on the player's lane. */
+      e->depth_fp += e->depth_vel_fp;
+      if (e->depth_fp >= FP_ONE) {
+        if (e->lane == g_player_lane && g_respawn_timer == 0 &&
+            g_jump_timer == 0) {
+          g_death_x = web_pixel_x(g_player_lane, FP_ONE);
+          g_death_y = web_pixel_y(g_player_lane, FP_ONE);
+          spawn_debris_burst();
+          g_respawn_timer = RESPAWN_DELAY;
+          g_wave_deaths++;
+#if !INFINITE_LIVES
+          if (g_lives) g_lives--;
+#endif
+          if (g_mcd_present) mcd_play_sfx(2);
+          else               sfx_death();
+        }
+        entity_kill(e);
       }
     } else if (e->type == E_PULSAR_SPARK) {
       /* Rim-walker. Hop one lane every PSPARK_HOP_PERIOD ticks in the
@@ -1237,7 +1318,7 @@ static void play_gated_vblank(void)
         if (en->type == E_FLIPPER || en->type == E_SUPER_FLIPPER ||
             en->type == E_TANKER  || en->type == E_PULSAR  ||
             en->type == E_FUSEBALL || en->type == E_SPIKER ||
-            en->type == E_PULSAR_SPARK) {
+            en->type == E_PULSAR_SPARK || en->type == E_BEAST) {
           if (en->depth_fp > best_depth) {
             best_depth  = en->depth_fp;
             target_lane = en->lane;
@@ -1290,16 +1371,29 @@ static void play_gated_vblank(void)
         if ((f->type == E_FLIPPER || f->type == E_SUPER_FLIPPER ||
              f->type == E_TANKER  || f->type == E_PULSAR  ||
              f->type == E_FUSEBALL || f->type == E_SPIKER ||
-             f->type == E_PULSAR_SPARK)
+             f->type == E_PULSAR_SPARK || f->type == E_BEAST)
             && f->lane == s->lane) {
           fp16 d = s->depth_fp - f->depth_fp;
           if (d < 0) d = -d;
           if (d <= HIT_DEPTH_TOL) {
             entity_kill(s);
+            /* Beast: 2-hit kill — first hit decrements lifetime, doesn't
+             * score; second hit kills + scores. */
+            if (f->type == E_BEAST) {
+              if (f->lifetime > 1) {
+                f->lifetime--;
+                if (g_mcd_present) mcd_play_sfx(1);
+                else               sfx_hit();
+                f = f_next;
+                continue;
+              }
+              kill_enemy(f);
+              award_score(PTS_BEAST);
+            }
             /* Jag per-enemy points (yak.s scoring table). Tanker break
              * itself scores 0 — the two spawned children score on their
              * own kills. */
-            if      (f->type == E_TANKER)        { split_tanker(f); award_score(PTS_TANKER);        }
+            else if (f->type == E_TANKER)        { split_tanker(f); award_score(PTS_TANKER);        }
             else if (f->type == E_PULSAR)        { kill_enemy(f);   award_score(PTS_PULSAR);        }
             else if (f->type == E_FUSEBALL)      { kill_enemy(f);   award_score(PTS_FUSEBALL);      }
             else if (f->type == E_SPIKER)        { kill_enemy(f);   award_score(PTS_SPIKER);        }
@@ -1374,7 +1468,8 @@ static void play_gated_vblank(void)
       u8 spark_hit = (f->type == E_PULSAR_SPARK && f->lane == g_player_lane);
       if (spark_hit ||
           (((f->type == E_FLIPPER || f->type == E_SUPER_FLIPPER ||
-             f->type == E_TANKER  || f->type == E_FUSEBALL) ||
+             f->type == E_TANKER  || f->type == E_FUSEBALL ||
+             f->type == E_BEAST) ||
             (f->type == E_PULSAR && pulse_peak)) &&
            f->phase == 1 && f->lane == g_player_lane)) {
         /* Snapshot claw's outer-rim screen position — the burst origin. */
@@ -1652,6 +1747,22 @@ static void play_main_thread(void)
     g_engine.paused = !g_engine.paused;
     if (g_engine.paused) print("PAUSE", plane_xy(17, 14));
     else                 print("     ", plane_xy(17, 14));   /* wipe overlay */
+  }
+
+  /* Skip-wave cheat: while paused, A B A C A → fly-down-tube to next wave. */
+  if (g_engine.paused && g_zoom_out_frame == 0) {
+    static u8 c0, c1, c2, c3, c4;
+    u8 pressed = (u8) (p1_single & (u8)(PAD_A | PAD_B | PAD_C));
+    if (pressed) {
+      c0 = c1; c1 = c2; c2 = c3; c3 = c4; c4 = pressed;
+      if (c0 == (u8) PAD_A && c1 == (u8) PAD_B && c2 == (u8) PAD_A &&
+          c3 == (u8) PAD_C && c4 == (u8) PAD_A) {
+        g_engine.paused  = 0;
+        print("     ", plane_xy(17, 14));      /* wipe PAUSE */
+        g_zoom_out_frame = 1;
+        c0 = c1 = c2 = c3 = c4 = 0;
+      }
+    }
   }
 
   // Score readout — 6 digits, leading zeros as spaces. Place-value
@@ -1932,6 +2043,7 @@ void main(void)
   cram[16 + 2] = 0x0EEE;       /* pal 1 slot 2 = white  (super flipper) */
   cram[16 + 3] = 0x0EE0;       /* pal 1 slot 3 = cyan   (pulsar tanker) */
   cram[32 + 3] = 0x00E0;       /* pal 2 slot 3 = green  (fuse  tanker)  */
+  cram[48 + 2] = 0x008E;       /* pal 3 slot 2 = orange (beast)         */
   update_cram();
 
   init_joypads();

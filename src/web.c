@@ -960,6 +960,31 @@ void render_sprites(void)
     emit_sprite_depth(spr_buf, n++, &sz, px, py, FP_ONE);
   }
 
+  /* Pass 5c: BEASTS — reuse flipper near-tier sprite, rendered through
+   * palette 3 (cram[48+2] = orange) to set them apart from red flippers.
+   * 4-rotation cycle in sync with regular flippers. */
+  for (Entity * e = g_active_head; e; e = e->next) {
+    if (e->type != E_BEAST || n >= SPR_MAX) continue;
+    s16 px = web_pixel_x(e->lane, e->depth_fp);
+    s16 py = web_pixel_y(e->lane, e->depth_fp);
+    u8 tier = (e->depth_fp < 0x5555) ? 0
+            : (e->depth_fp < 0xAAAA) ? 1 : 2;
+    SpriteSizeDef sz = { SPR_SIZE_1x1,
+                         (u16) (FLIPPER_TILE_BASE + tier * 4 + frame),
+                         4 };
+    emit_sprite_depth_pal(spr_buf, n++, &sz, px, py, e->depth_fp,
+                          (u16) 0x6000 /* palette 3 → orange */);
+  }
+
+  /* Pass 5d: ENEMY SHOTS — reuse the player-shot tile. Direction (always
+   * travelling outward toward the rim) is the visual distinction. */
+  for (Entity * e = g_active_head; e; e = e->next) {
+    if (e->type != E_ENEMY_SHOT || n >= SPR_MAX) continue;
+    s16 px = web_pixel_x(e->lane, e->depth_fp);
+    s16 py = web_pixel_y(e->lane, e->depth_fp);
+    emit_sprite_depth(spr_buf, n++, &SHOT_SIZE, px, py, e->depth_fp);
+  }
+
   /* Pass 6: FUSEBALLS — 3 depth tiers × 2 leg frames. Cycle ~8 fps. */
   u8 const fuseball_frame = (u8) ((g_anim_frame >> 3) & 0x1);
   for (Entity * e = g_active_head; e; e = e->next) {

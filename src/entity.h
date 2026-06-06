@@ -78,6 +78,18 @@ typedef enum {
                     //   step_period   = ticks until next lane hop
                     //   lifetime      = u8 countdown — auto-despawn so
                     //                   sparks don't circle forever
+  E_BEAST     = 14, // Mid-boss flipper-class (Jag's "beasty", level 10+).
+                    // Descends like a flipper, fires enemy bullets,
+                    // takes 2 hits, scores 600. Field reuse:
+                    //   lane / depth_fp / depth_vel_fp / phase  same as
+                    //     E_FLIPPER (phase 0=desc / 1=rim).
+                    //   step_period = bullet cooldown countdown.
+                    //   lifetime    = remaining HP (starts 2; -1 per hit).
+  E_ENEMY_SHOT = 15, // Bullet fired by E_BEAST (and future shooters).
+                    // Travels OUTWARD (rim→center reversed: 0→FP_ONE).
+                    // Kills player on same-lane rim contact. Field reuse:
+                    //   lane / depth_fp / depth_vel_fp  same as E_SHOT
+                    //     but depth_vel_fp is POSITIVE (outward).
 } EntityType;
 
 struct Entity {
