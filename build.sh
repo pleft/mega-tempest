@@ -41,7 +41,7 @@ if ! docker info >/dev/null 2>&1; then
   exit 1
 fi
 
-# --- 1. Fetch + convert the (non-redistributed) Tempest 2000 assets ----------
+# --- 1. Fetch + convert the Tempest 2000 game assets ------------------------
 "$HERE/fetch_assets.sh"
 
 # --- 2. megadev framework (toolchain + library) -----------------------------

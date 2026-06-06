@@ -17,8 +17,8 @@ prog_ram_*.bin
 /tools/sfx_previews/
 /res/*.mod.samples/
 
-# Tempest 2000 game assets — NOT redistributed here. Fetched from
-# mwenge/tempest2k and converted by fetch_assets.sh at build time.
+# Game assets — fetched from mwenge/tempest2k and converted by
+# fetch_assets.sh at build time.
 /res/rave4.mod
 /res/tune5.mod
 /res/tune7.mod

@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Fetch + regenerate the Tempest 2000 game assets mega-tempest needs to build.
 #
-# This repository does NOT redistribute Tempest 2000's copyrighted assets
-# (music, font, sprite shapes, sound effects). They are pulled from the
+# The music, font, sprite shapes, and sound effects are pulled from the
 # mwenge/tempest2k source tree and converted on the fly by the
 # tools/extract_*.py scripts.
 #

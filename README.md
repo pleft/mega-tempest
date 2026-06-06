@@ -135,7 +135,7 @@ On-screen text (HUD, LOADING, GAME OVER, scene messages) renders in the Jaguar T
 machine. On the first run it will:
 
 1. check for the three tools it can't install for you: **`git`**, **`docker`**, **`python3`**;
-2. fetch the Tempest 2000 game assets and convert them (see *Assets & licensing* below);
+2. fetch the Tempest 2000 game assets and convert them (see *Assets* below);
 3. clone the [megadev](https://github.com/drojaazu/megadev) framework next to this repo;
 4. build the megadev m68k toolchain Docker image (one-time, ~1–2 min);
 5. build the Sub CPU module (`sub/spx.smd`), then the cart, and copy the result to `../mega-tempest-<version>.bin`.
@@ -144,12 +144,10 @@ Network access is needed on the first run (the clones + the Docker image
 build). Subsequent runs reuse everything and just rebuild. The version is
 pinned at the top of `build.sh` — bump it on each tagged release.
 
-### Assets & licensing
+### Assets
 
-This repository contains **only original code and conversion tooling** — it
-does **not** redistribute Tempest 2000's copyrighted assets. The music
-(`*.mod`), font, sprite shapes, and sound effects are fetched from the
-[mwenge/tempest2k](https://github.com/mwenge/tempest2k) source tree and
+The music (`*.mod`), font, sprite shapes, and sound effects are fetched from
+the [mwenge/tempest2k](https://github.com/mwenge/tempest2k) source tree and
 converted at build time by `fetch_assets.sh` (which calls the
 `tools/extract_*.py` scripts). Both upstreams are pinned to specific commits
 so the build is reproducible. To regenerate the assets without building:
@@ -157,9 +155,6 @@ so the build is reproducible. To regenerate the assets without building:
 ```sh
 ./fetch_assets.sh
 ```
-
-The only third-party file checked in is `res/megadev.md.pal` — a 32-byte
-palette from megadev's examples (MIT, © Damian Rogers).
 
 ## Run
 
@@ -201,9 +196,3 @@ Killed tankers drop a glyph that drifts to the rim — grab it by being on the s
 - **Reverse-engineered Jag source**: [mwenge/tempest2k](https://github.com/mwenge/tempest2k) — invaluable reference for enemy AI, wave structure, polygon data, and palette decisions.
 - **Mega CD development framework**: [megadev](https://github.com/drojaazu/megadev) — provided the Mode 1 boot setup, Sub CPU build pipeline, and VDP helpers.
 - **MOD player on RF5C164**: based on the Chilly Willy lineage via [matteusbeus/ModPlayer](https://github.com/matteusbeus/ModPlayer).
-
----
-
-## License + redistribution
-
-Source code under this project is provided for educational and homebrew purposes. Tempest 2000 itself is © Atari / Llamasoft. The MOD music files (`rave4.mod`, `tune5.mod`, `tune7.mod`, `tune12.mod`, `tune13.mod`), the on-screen font tiles, and the polygon/sprite data are all derived from the original game; redistribution beyond personal use should respect the rights of the original creators.
