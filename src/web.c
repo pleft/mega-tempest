@@ -548,7 +548,12 @@ static void web_fill_quad_c(WebCfg const * c,
 #define WEB_FILL_PAL_4  12
 #define WEB_FILL_PAL_5  13
 #define WEB_FILL_PAL_6  14
-#define WEB_FILL_PAL_7  15     /* brightest, outermost band */
+#define WEB_FILL_PAL_7  14     /* duplicates band 6 — slot 15 is now the
+                                * text anti-alias grey (cram[15] is set
+                                * to 0x0888 in main.c init). The two
+                                * outermost web bands were already the
+                                * same colour (0x0E00) in v0.2; nothing
+                                * changes visually for the web. */
 
 /* Parametric core. Renders the current web shape into cfg->buf at the
  * cfg's specified scale + dimensions. Used by both web_render_main

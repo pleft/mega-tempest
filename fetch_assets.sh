@@ -42,7 +42,7 @@ for m in rave4 tune5 tune7 tune12 tune13; do
   cp "$T2K_DIR/src/sounds/$m.mod" "$HERE/res/$m.mod"
 done
 
-echo "==> converting font / sprites / SFX from the T2K source"
+echo "==> generating font + converting sprites / SFX from the T2K source"
 python3 "$HERE/tools/extract_font.py"
 python3 "$HERE/tools/extract_mcd_sprites.py"
 python3 "$HERE/tools/extract_sfx.py"

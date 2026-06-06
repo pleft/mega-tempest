@@ -22,9 +22,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - **MODULE_ROM relocated** from `$10000-$1DFFF` (56 KB) to `$14000-$1DFFF` (40 KB). The freed `$01100-$13FFF` region (~75 KB) is now the SFX bank, large enough to hold all current SFX at full Jag-original sizes with headroom for ~10 more.
 - **DEATH / ZAP / EXC restored to full Jag-original sizes** — previously trimmed (12 KB / 7 KB / 13.5 KB) to fit the old 56 KB bank, now stored at 21 KB / 17 KB / 23 KB. DEATH plays its full crash decay; ZAP plays the full Crackle; EXC plays the trailing reverb of "Excellent!" instead of cutting off after the "t".
 
+### Changed (on-screen font)
+- New hand-designed 6×7 chunky-italic pixel font, replacing the Jaguar-extracted cfont which didn't translate cleanly to 1bpp tiles.
+
 ### Removed
-- `BONUS_LIFE_EVERY` define + `g_bonus_life_pending` flag (superseded by the 10k-threshold mechanic).
-- Sub-side `sub/src/sfx_data.{c,h}` (and its `sfx_data.c` entry in the sub Makefile). SFX bytes live in the cart now.
+- `BONUS_LIFE_EVERY` + `g_bonus_life_pending` (superseded by the 10k threshold).
+- Sub-side `sub/src/sfx_data.{c,h}` (SFX bytes live in the cart now).
 
 ## [0.2.1-beta] — 2026-06-01
 

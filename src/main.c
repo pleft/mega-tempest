@@ -1869,8 +1869,10 @@ void main(void)
   cram[11] = 0x00EE;          // 11 yellow — player claw (moved off slot 4)
   cram[12] = 0x0A00;          // 12 web fill band 4
   cram[13] = 0x0C00;          // 13 web fill band 5
-  cram[14] = 0x0E00;          // 14 web fill band 6 — bright blue
-  cram[15] = 0x0E00;          // 15 web fill band 7 — pure blue, outline (0x0E80) pops above it
+  cram[14] = 0x0E00;          // 14 web fill bands 6 + 7 — bright blue
+  cram[15] = 0x0888;          // 15 mid grey — text anti-alias dim (the
+                              // outermost web band reuses slot 14, since
+                              // 14 and 15 were both 0x0E00 in v0.2 anyway)
 
   /* Per-sprite palette variants for enemy sub-types (v0.2). Same tile
    * bytes render in different colours when the sprite-attribute palette

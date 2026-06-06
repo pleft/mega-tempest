@@ -120,8 +120,8 @@ The megadev linker script anchors `.data` at `0xFF0000`, which makes objcopy pad
 ### Color fidelity
 The web uses an 8-step pure-blue gradient across CRAM slots 5-8 + 12-15 (every valid `xBGR` blue intensity from `0x2` to `0xE`), with the outline at `0x0E80` to match the Jag's electric-blue rim. The player claw still uses yellow on slot 11.
 
-### Original font
-On-screen text (HUD, LOADING, GAME OVER, scene messages) renders in the Jaguar T2K "small regular font" (`cfont` per `yak.s:19163`). We extract it from `tempest2k-source/src/dat/cfont.dat` + `images/beasty3.cry`, threshold the CRY16 Y-channel at `0x80` (keeps just the bright letter core, drops the anti-alias halo), and emit a raw 4bpp 96-glyph tile blob the megadev DMA helper uploads to VRAM at boot.
+### Hand-designed pixel font
+On-screen text uses a hand-designed 6×7 chunky-italic pixel font. Glyphs live inline in `tools/extract_font.py`, which emits the 4bpp tile blob DMA'd to VRAM at boot.
 
 ---
 
